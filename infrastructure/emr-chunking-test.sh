@@ -202,8 +202,8 @@ build_emr_args() {
         --auto-termination-policy IdleTimeout=300
         --tags "Project=$PROJECT_TAG"
         --ec2-attributes "$EC2_ATTRS"
-        --bootstrap-actions Path="s3://elasticmapreduce/bootstrap-actions/run-if",Args=["instance.isMaster=true,sudo pip3 install pandas"]
-        --bootstrap-actions Path="s3://elasticmapreduce/bootstrap-actions/run-if",Args=["instance.isCore=true,sudo pip3 install pandas"]
+        --bootstrap-actions Path="s3://elasticmapreduce/bootstrap-actions/run-if",Args=["instance.isMaster=true,sudo pip3 install pandas pyarrow numpy requests boto3"]
+        --bootstrap-actions Path="s3://elasticmapreduce/bootstrap-actions/run-if",Args=["instance.isCore=true,sudo pip3 install pandas pyarrow numpy requests boto3"]
     )
     if [ "$SPOT" == "yes" ]; then
         ARGS+=(--instance-groups
@@ -285,7 +285,7 @@ step "Submitting chunk_only_pipeline.py as Spark step..."
 STEP_ID=$(aws emr add-steps \
     --cluster-id "$CLUSTER_ID" \
     --region "$AWS_REGION" \
-    --steps "Type=Spark,Name=CORD19-ChunkOnly,ActionOnFailure=CONTINUE,Args=[--master,yarn,--deploy-mode,client,--conf,spark.sql.adaptive.enabled=true,--py-files,${JOB_S3_PREFIX}config.py,${JOB_S3_PREFIX}chunk_only_pipeline.py]" \
+    --steps "Type=Spark,Name=CORD19-ChunkOnly,ActionOnFailure=CONTINUE,Args=[--master,yarn,--deploy-mode,client,--conf,spark.sql.adaptive.enabled=true,--conf,spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.AnonymousAWSCredentialsProvider,--conf,spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem,--py-files,${JOB_S3_PREFIX}config.py,${JOB_S3_PREFIX}chunk_only_pipeline.py]" \
     --query 'StepIds[0]' --output text)
 
 info "Step submitted: $STEP_ID"

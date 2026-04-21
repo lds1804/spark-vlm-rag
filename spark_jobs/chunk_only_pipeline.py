@@ -21,7 +21,7 @@ from pyspark.sql.types import ArrayType, StringType
 
 import config
 
-CORD19_S3_PATH = "s3a://ai2-semanticscholar-cord-19/2024-11-26/metadata/"
+CORD19_S3_PATH = "s3a://ai2-semanticscholar-cord-19/latest/metadata.csv"
 
 
 def chunk_text(text: str, chunk_size: int = config.CHUNK_SIZE, overlap: int = config.CHUNK_OVERLAP) -> List[str]:
@@ -46,15 +46,18 @@ def main():
         .master(config.SPARK_MASTER)
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        # Anonymous access for public CORD-19 S3 bucket (override EMR defaults)
+        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.AnonymousAWSCredentialsProvider")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .getOrCreate()
     )
 
-    # 1. Read CORD-19 metadata from public S3 (CSV, no schema inference)
+    # 1. Read CORD-19 metadata from public S3
     df = (
         spark.read
         .option("header", True)
         .option("inferSchema", False)
-        .csv(CORD19_S3_PATH + "*.csv")
+        .csv(CORD19_S3_PATH)
     )
 
     # 2. Build raw text from title + abstract
