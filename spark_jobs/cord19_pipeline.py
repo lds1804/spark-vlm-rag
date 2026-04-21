@@ -16,8 +16,12 @@ Usage:
 
 import requests
 from typing import List
+import pandas as pd
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import udf, explode, col, monotonically_increasing_id
+from pyspark.sql.functions import (
+    explode, col, monotonically_increasing_id,
+    concat_ws, regexp_replace, trim, pandas_udf,
+)
 from pyspark.sql.types import ArrayType, StringType, StructType, StructField, FloatType
 
 import config
@@ -88,44 +92,40 @@ def main():
 
     # 1. Read CORD-19 metadata from public S3
     # CORD-19 metadata files are CSVs inside a partitioned prefix.
-    # Use wildcard to load all CSV parts.
-    df = spark.read.option("header", True).csv(CORD19_S3_PATH + "*.csv")
-
-    print(f"Loaded {df.count()} papers from CORD-19")
+    # Use wildcard to load all CSV parts.  Disable schema inference
+    # (everything stays StringType) and let Spark infer only the header.
+    df = (
+        spark.read
+        .option("header", True)
+        .option("inferSchema", False)
+        .csv(CORD19_S3_PATH + "*.csv")
+    )
 
     # 2. Select relevant text columns and concatenate
     # For POC we use: title + abstract
     # In production, read full-text JSON and use body_text paragraphs.
-    from pyspark.sql.functions import concat_ws
-
     df_text = (
         df.select("cord_uid", "title", "abstract")
         .withColumn(
             "raw_text",
-            concat_ws(
-                "\n\n",
-                col("title"),
-                col("abstract"),
-            ),
+            concat_ws("\n\n", col("title"), col("abstract")),
         )
         .filter(col("raw_text").isNotNull())
     )
 
-    # 3. Clean text (basic UDF)
-    @udf(StringType())
-    def clean_text(text):
-        if not text:
-            return ""
-        return " ".join(str(text).split())
+    # 3. Clean text using native Spark SQL functions
+    # Collapse all whitespace sequences into a single space and trim edges.
+    df_clean = df_text.withColumn(
+        "cleaned_text",
+        trim(regexp_replace(col("raw_text"), r"\s+", " ")),
+    )
 
-    df_clean = df_text.withColumn("cleaned_text", clean_text(col("raw_text")))
-
-    # 4. Chunking UDF
-    chunk_schema = ArrayType(StringType())
-
-    @udf(chunk_schema)
-    def chunk_udf(text):
-        return chunk_text(text, config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+    # 4. Chunking with a Pandas UDF (vectorised, much faster than row-at-a-time UDF)
+    @pandas_udf(ArrayType(StringType()))
+    def chunk_udf(texts: pd.Series) -> pd.Series:
+        return texts.apply(
+            lambda t: chunk_text(t, config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+        )
 
     df_chunks = (
         df_clean
@@ -134,37 +134,29 @@ def main():
         .withColumn("chunk_id", monotonically_increasing_id())
     )
 
-    # Repartition after explode to balance workload
-    df_chunks = df_chunks.repartition(200)
+    # Let AQE handle partitioning instead of a hard-coded repartition.
+    # If you still see skew, uncomment the line below:
+    # df_chunks = df_chunks.repartition(200)
 
-    # 5. Generate embeddings via vLLM (batched per partition)
-    def process_partition(rows):
-        texts = []
-        metadata = []
-        for row in rows:
-            texts.append(row.chunk_text)
-            metadata.append({
-                "doc_id": row.cord_uid,
-                "chunk_id": row.chunk_id,
-                "chunk_text": row.chunk_text,
-                "title": row.title,
-            })
-
-        embeddings = get_embeddings(texts)
-        for meta, emb in zip(metadata, embeddings):
-            meta["embedding"] = emb
-            yield meta
-
+    # 5. Generate embeddings via vLLM using mapInPandas
+    # mapInPandas yields a pandas DataFrame per iterator batch, allowing
+    # efficient batched HTTP calls to the embedding endpoint.
     embedding_schema = StructType([
-        StructField("doc_id", StringType(), True),
+        StructField("cord_uid", StringType(), True),
         StructField("chunk_id", StringType(), True),
         StructField("chunk_text", StringType(), True),
         StructField("title", StringType(), True),
         StructField("embedding", ArrayType(FloatType()), True),
     ])
 
-    rdd = df_chunks.rdd.mapPartitions(process_partition)
-    df_embeddings = spark.createDataFrame(rdd, embedding_schema)
+    def embed_batch(iterator):
+        for pdf in iterator:
+            texts = pdf["chunk_text"].tolist()
+            embs = get_embeddings(texts)
+            pdf["embedding"] = embs
+            yield pdf
+
+    df_embeddings = df_chunks.mapInPandas(embed_batch, schema=embedding_schema)
 
     # 6. Write results to S3
     output_path = config.S3_OUTPUT_PATH or "s3a://my-bucket/cord19-embeddings/"
