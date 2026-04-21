@@ -181,15 +181,20 @@ info "Requesting Spot instance ($INSTANCE_TYPE)..."
 SPOT_ARGS=("${BASE_ARGS[@]}")
 SPOT_ARGS+=(--instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time","InstanceInterruptionBehavior":"terminate"}}')
 
+# Temporarily disable set -e so failed Spot request doesn't kill the script
+set +e
 SPOT_OUTPUT=$(aws ec2 run-instances "${SPOT_ARGS[@]}" --query 'Instances[0].InstanceId' --output text 2>&1)
 SPOT_EXIT=$?
+set -e
 
 if [ $SPOT_EXIT -ne 0 ] || [ -z "$SPOT_OUTPUT" ] || [ "$SPOT_OUTPUT" == "None" ]; then
     warn "Spot capacity unavailable for $INSTANCE_TYPE."
     warn "  Reason: $(echo "$SPOT_OUTPUT" | head -1)"
     warn "Falling back to On-Demand..."
+    set +e
     INSTANCE_ID=$(aws ec2 run-instances "${BASE_ARGS[@]}" --query 'Instances[0].InstanceId' --output text 2>&1)
     ONDEMAND_EXIT=$?
+    set -e
     if [ $ONDEMAND_EXIT -ne 0 ] || [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
         error "On-Demand launch also failed: $INSTANCE_ID. Try a different instance type (export INSTANCE_TYPE=m5a.large)"
     fi
