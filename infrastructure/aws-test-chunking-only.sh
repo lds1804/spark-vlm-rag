@@ -133,6 +133,9 @@ if [ -z "$SG_ID" ] || [ "$SG_ID" == "None" ]; then
     info "Your public IP: $CALLER_IP — restricting SSH to this IP"
     aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$CALLER_IP" >/dev/null || true
 
+    # Ingress: allow all traffic between instances in this SG (vLLM <-> Spark <-> Weaviate)
+    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol all --source-group "$SG_ID" >/dev/null || true
+
     # Egress: HTTPS (S3, apt, pip, git), HTTP (apt repos), DNS (TCP+UDP)
     aws ec2 authorize-security-group-egress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 443 --cidr 0.0.0.0/0 >/dev/null || true
     aws ec2 authorize-security-group-egress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 80 --cidr 0.0.0.0/0 >/dev/null || true
