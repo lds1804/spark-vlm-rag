@@ -153,12 +153,14 @@ info "AMI: $AMI"
 # ---------------------------------------------------------------------------
 # Launch Spot instance
 # ---------------------------------------------------------------------------
+# Validate SG_ID is not empty before launch
+[ -z "$SG_ID" ] || [ "$SG_ID" == "None" ] && error "Security group ID is empty. Cannot launch instance."
+
 RUN_ARGS=(
     --region "$AWS_REGION"
     --image-id "$AMI"
     --instance-type "$INSTANCE_TYPE"
     --security-group-ids "$SG_ID"
-    --subnet-id "$SUBNET_ID"
     --user-data "$ENCODED_USER_DATA"
     --iam-instance-profile "Name=$PROFILE_NAME"
     --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":30,"VolumeType":"gp3"}}]'
