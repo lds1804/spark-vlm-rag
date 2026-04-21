@@ -1,0 +1,57 @@
+version: '3.8'
+
+# Orchestrates the full RAG stack for local testing or single EC2 POC.
+# For production, deploy each component on its own instance or use ECS/EKS.
+
+services:
+  weaviate:
+    image: semitechnologies/weaviate:1.24.0
+    ports:
+      - "8080:8080"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'none'
+      ENABLE_MODULES: ''
+      CLUSTER_HOSTNAME: 'node1'
+    restart: unless-stopped
+
+  vllm:
+    build:
+      context: ./infrastructure/docker/vllm
+      dockerfile: Dockerfile
+    # For GPU support on EC2, install nvidia-docker2 and use:
+    # runtime: nvidia
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    ports:
+      - "8000:8000"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - VLLM_HOST=http://vllm:8000
+      - VECTOR_DB_HOST=weaviate
+      - VECTOR_DB_PORT=8080
+    depends_on:
+      - vllm
+      - weaviate
+    restart: unless-stopped
+
+volumes:
+  weaviate_data:
