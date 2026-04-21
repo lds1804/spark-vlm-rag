@@ -51,6 +51,66 @@ info "Output: $S3_OUTPUT_PATH"
 info "Instance type: $INSTANCE_TYPE"
 
 # ---------------------------------------------------------------------------
+# Extract bucket name and ensure bucket exists
+# ---------------------------------------------------------------------------
+BUCKET_NAME=$(echo "$S3_OUTPUT_PATH" | sed -n 's|s3a*://\([^/]*\).*|\1|p')
+[ -z "$BUCKET_NAME" ] && error "Could not extract bucket name from S3_OUTPUT_PATH."
+info "Target S3 bucket: $BUCKET_NAME"
+
+BUCKET_EXISTS=$(aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" 2>&1 || true)
+if [ -n "$BUCKET_EXISTS" ]; then
+    warn "Bucket '$BUCKET_NAME' not found. Creating it..."
+    if [ "$AWS_REGION" == "us-east-1" ]; then
+        aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION"
+    else
+        aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --create-bucket-configuration LocationConstraint="$AWS_REGION"
+    fi
+    info "Created bucket: $BUCKET_NAME"
+else
+    info "Bucket already exists: $BUCKET_NAME"
+fi
+
+# ---------------------------------------------------------------------------
+# Create IAM role + instance profile so EC2 can write to S3
+# ---------------------------------------------------------------------------
+ROLE_NAME="${PROJECT_TAG}-role"
+PROFILE_NAME="${PROJECT_TAG}-profile"
+POLICY_NAME="${PROJECT_TAG}-s3-policy"
+
+ROLE_EXISTS=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.RoleName' --output text 2>/dev/null || echo "none")
+
+if [ "$ROLE_EXISTS" == "none" ]; then
+    info "Creating IAM role and instance profile for S3 access..."
+
+    # Trust policy for EC2
+    cat > /tmp/trust-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "Service": "ec2.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+
+    aws iam create-role --role-name "$ROLE_NAME" --assume-role-policy-document file:///tmp/trust-policy.json >/dev/null
+    aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess >/dev/null
+    aws iam create-instance-profile --instance-profile-name "$PROFILE_NAME" >/dev/null
+    aws iam add-role-to-instance-profile --instance-profile-name "$PROFILE_NAME" --role-name "$ROLE_NAME" >/dev/null
+
+    # Wait a few seconds for IAM propagation
+    sleep 5
+    info "Created IAM role: $ROLE_NAME + profile: $PROFILE_NAME"
+else
+    info "Using existing IAM role: $ROLE_NAME"
+fi
+
+INSTANCE_PROFILE_ARN=$(aws iam get-instance-profile --instance-profile-name "$PROFILE_NAME" --query 'InstanceProfile.Arn' --output text)
+
+# ---------------------------------------------------------------------------
 # Get default VPC + subnet
 # ---------------------------------------------------------------------------
 VPC_ID=$(aws ec2 describe-vpcs --region "$AWS_REGION" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
@@ -100,6 +160,7 @@ RUN_ARGS=(
     --security-group-ids "$SG_ID"
     --subnet-id "$SUBNET_ID"
     --user-data "$ENCODED_USER_DATA"
+    --iam-instance-profile "Name=$PROFILE_NAME"
     --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":30,"VolumeType":"gp3"}}]'
     --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${PROJECT_TAG}},{Key=Project,Value=${PROJECT_TAG}}]"
     --instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time","InstanceInterruptionBehavior":"terminate"}}'
