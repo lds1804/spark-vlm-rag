@@ -1,85 +1,85 @@
-# Plano de Projeto: RAG com Apache Spark + vLLM na AWS
+# Project Plan: RAG with Apache Spark + vLLM on AWS
 
-## Visao Geral da Arquitetura
+## Architecture Overview
 
 ```
 [S3 Data Lake / RDS / DynamoDB]
          |
          v
-[Apache Spark (EMR ou EC2)]  -- Batch/Streaming ETL + Embedding Generation
-         |                           (chama vLLM Embedding API)
+[Apache Spark (EMR or EC2)]  -- Batch/Streaming ETL + Embedding Generation
+         |                           (calls vLLM Embedding API)
          v
-[Vector Database (Weaviate/Milvus em EC2 ou Amazon OpenSearch)]
+[Vector Database (Weaviate/Milvus on EC2 or Amazon OpenSearch)]
          ^
          |                           (similarity search)
-    [vLLM Server (EC2 GPU)]  -- Gera embeddings + respostas LLM
+    [vLLM Server (EC2 GPU)]  -- Generates embeddings + LLM answers
          ^
          |
     [API Gateway / Load Balancer]
          ^
          |
-    [Cliente / Aplicacao]
+    [Client / Application]
 ```
 
-## Componentes Principais
+## Main Components
 
-### 1. Fonte de Dados
-- Dados hospedados em S3 (Data Lake), RDS PostgreSQL, ou DynamoDB.
-- Spark le os dados brutos, aplica transformacoes (limpeza, chunking), e prepara para embedding.
+### 1. Data Source
+- Data hosted on S3 (Data Lake), RDS PostgreSQL, or DynamoDB.
+- Spark reads raw data, applies transformations (cleaning, chunking), and prepares for embedding.
 
-### 2. Apache Spark (Processamento)
-- **Opcao A: AWS EMR** (recomendado para producao) — cluster gerenciado com Spark.
-- **Opcao B: EC2 manual** — cluster Spark standalone em instancias EC2.
-- Responsabilidades:
-  - Ingestao e transformacao de dados.
-  - **Chunking distribuido e performatico** via Spark (ver secao dedicada abaixo).
-  - Chamadas paralelas ao endpoint de embeddings do vLLM.
-  - Escrita dos vetores + metadados no banco vetorial.
+### 2. Apache Spark (Processing)
+- **Option A: AWS EMR** (recommended for production) — managed cluster with Spark.
+- **Option B: Manual EC2** — standalone Spark cluster on EC2 instances.
+- Responsibilities:
+  - Data ingestion and transformation.
+  - **Distributed and performant chunking** via Spark (see dedicated section below).
+  - Parallel calls to the vLLM embedding endpoint.
+  - Writing vectors + metadata to the vector database.
 
-### 3. vLLM Self-Hosted (EC2 GPU)
-- Instancia EC2 com GPU (ex: g5.xlarge, p3.2xlarge).
-- vLLM servindo dois endpoints:
-  - `/v1/embeddings` — para gerar vetores dos chunks no pipeline Spark.
-  - `/v1/completions` ou `/v1/chat/completions` — para gerar respostas RAG.
-- Modelo de embedding recomendado: `BAAI/bge-large-en` (ou similar compativel com vLLM).
-- Modelo de geracao recomendado: `meta-llama/Llama-2-7b-chat-hf`, `Mistral-7B-Instruct`, etc.
+### 3. Self-Hosted vLLM (EC2 GPU)
+- EC2 instance with GPU (e.g., g5.xlarge, p3.2xlarge).
+- vLLM serving two endpoints:
+  - `/v1/embeddings` — to generate vectors for chunks in the Spark pipeline.
+  - `/v1/completions` or `/v1/chat/completions` — to generate RAG answers.
+- Recommended embedding model: `BAAI/bge-large-en` (or similar vLLM-compatible).
+- Recommended generation model: `meta-llama/Llama-2-7b-chat-hf`, `Mistral-7B-Instruct`, etc.
 
 ### 4. Vector Database
-Opcoes populares e bem suportadas:
-- **Weaviate** (recomendado) — open-source, nativo vetorial, facil deploy via Docker em EC2 ou EKS.
-- **Milvus** — altamente escalavel, ideal para grandes volumes.
-- **pgvector (PostgreSQL)** — se ja usar RDS PostgreSQL, e a opcao mais simples.
-- **Amazon OpenSearch Serverless** — totalmente gerenciado pela AWS, sem servidor para manter.
+Popular and well-supported options:
+- **Weaviate** (recommended) — open-source, native vector DB, easy Docker deploy on EC2 or EKS.
+- **Milvus** — highly scalable, ideal for large volumes.
+- **pgvector (PostgreSQL)** — if you already use RDS PostgreSQL, the simplest option.
+- **Amazon OpenSearch Serverless** — fully AWS-managed, no server to maintain.
 
 ### 5. API / Interface
-- FastAPI ou Flask rodando em EC2/ECS/EKS.
-- Recebe pergunta do usuario -> gera embedding via vLLM -> busca no vector DB -> monta prompt com contexto -> gera resposta via vLLM.
+- FastAPI or Flask running on EC2/ECS/EKS.
+- Receives user question -> generates embedding via vLLM -> searches vector DB -> builds prompt with context -> generates answer via vLLM.
 
-## Chunking Distribuido com Spark (Performatico)
+## Distributed Chunking with Spark (Performant)
 
-Fazer chunking diretamente no Spark e altamente performatico para grandes volumes porque:
-- Processamento paralelo em todos os executors do cluster.
-- Sem gargalo de memoria de um unico no (diferente de processamento local).
-- Escalavel horizontalmente: mais dados = mais workers.
+Doing chunking directly in Spark is highly performant for large volumes because:
+- Parallel processing across all cluster executors.
+- No single-node memory bottleneck (unlike local processing).
+- Horizontally scalable: more data = more workers.
 
-### Estrategias de Chunking no Spark
+### Chunking Strategies in Spark
 
-1. **Chunking por caractere/tamanho fixo** (mais rapido):
-   - UDF PySpark que divide texto em pedacos de `chunk_size` com `overlap`.
-   - Usa `explode()` para criar uma linha por chunk.
-   - Ideal quando o formato do documento ja e limpo (CSV, tabelas, logs).
+1. **Fixed-size character chunking** (fastest):
+   - PySpark UDF that splits text into `chunk_size` pieces with `overlap`.
+   - Uses `explode()` to create one row per chunk.
+   - Ideal when the document format is already clean (CSV, tables, logs).
 
-2. **Chunking por delimitador estrutural** (mais inteligente):
-   - Divide por paragrafos, capitulos, ou tags (ex: `\n\n`, markdown headers).
-   - Fallback para chunking fixo se o bloco for muito grande.
-   - Melhor para PDFs convertidos ou documentos estruturados.
+2. **Structural delimiter chunking** (smarter):
+   - Splits by paragraphs, chapters, or tags (e.g., `\n\n`, markdown headers).
+   - Fallback to fixed-size chunking if the block is too large.
+   - Better for converted PDFs or structured documents.
 
-3. **Chunking por sentenca (NLTK / spaCy)**:
-   - Pode ser feito via UDF com `nltk.sent_tokenize` ou `spaCy`.
-   - Custo maior, mas chunks mais semanticos.
-   - Recomendado apenas se o tempo de processamento for aceitavel; considere pre-instalar as libs nos nodes do EMR.
+3. **Sentence-level chunking (NLTK / spaCy)**:
+   - Can be done via UDF with `nltk.sent_tokenize` or `spaCy`.
+   - Higher cost, but more semantic chunks.
+   - Recommended only if processing time is acceptable; consider pre-installing libs on EMR nodes.
 
-### Exemplo de fluxo Spark para Chunking
+### Example Spark Chunking Flow
 
 ```
 DataFrame(doc_id, raw_text)
@@ -89,59 +89,59 @@ DataFrame(doc_id, raw_text)
 DataFrame(doc_id, chunk_id, chunk_text, metadata)
 ```
 
-**Dica de performance**:
-- Ajuste `spark.sql.adaptive.enabled=true` para otimizar particoes automaticamente.
-- Use `repartition()` apos o explode se o numero de chunks for muito maior que o de documentos.
-- Persista (`cache()`) o DataFrame pos-limpeza se ele for reusado em multiplas etapas.
+**Performance Tips**:
+- Set `spark.sql.adaptive.enabled=true` to auto-optimize partitions.
+- Use `repartition()` after explode if the chunk count is much larger than the document count.
+- Persist (`cache()`) the post-cleanup DataFrame if it will be reused across multiple stages.
 
-## Pipeline de Dados (Spark)
+## Data Pipeline (Spark)
 
-1. **Leitura**: Spark le tabelas/dados do S3 ou banco relacional.
-2. **Pre-processamento**: limpeza de texto, remocao de ruido.
-3. **Chunking distribuido**: divide documentos em blocos via Spark UDFs (ver secao acima).
-4. **Embedding**: UDF Spark chama API do vLLM em batches paralelos.
-5. **Escrita**: Insere vetores + metadados (texto original, fonte, data) no vector DB.
+1. **Read**: Spark reads tables/data from S3 or relational database.
+2. **Pre-processing**: text cleaning, noise removal.
+3. **Distributed chunking**: splits documents into blocks via Spark UDFs (see section above).
+4. **Embedding**: Spark UDF calls vLLM API in parallel batches.
+5. **Write**: inserts vectors + metadata (original text, source, date) into vector DB.
 
-## Infraestrutura AWS Sugerida
+## Suggested AWS Infrastructure
 
-| Componente     | Servico AWS                      | Instancia para Teste (barata) | Instancia para Producao |
+| Component     | AWS Service                      | Test Instance (cheap)         | Production Instance     |
 |----------------|----------------------------------|-------------------------------|-------------------------|
-| Spark Cluster  | EMR Serverless ou EMR on EC2     | 1x m5.large (single node)     | r5.xlarge (driver), r5.2xlarge (workers) |
-| vLLM Server    | EC2                              | g4dn.xlarge (GPU mais barata) | g5.xlarge / g5.2xlarge  |
-| Vector DB      | EC2 (Docker) ou OpenSearch       | t3.medium (Docker local)      | r5.large / Serverless   |
-| API/App        | ECS Fargate ou EC2               | t3.micro                      | t3.medium               |
-| Dados          | S3 + RDS PostgreSQL              | -                             | -                       |
+| Spark Cluster  | EMR Serverless or EMR on EC2     | 1x m5.large (single node)     | r5.xlarge (driver), r5.2xlarge (workers) |
+| vLLM Server    | EC2                              | g4dn.xlarge (cheapest GPU)    | g5.xlarge / g5.2xlarge  |
+| Vector DB      | EC2 (Docker) or OpenSearch       | t3.medium (local Docker)      | r5.large / Serverless   |
+| API/App        | ECS Fargate or EC2               | t3.micro                      | t3.medium               |
+| Data           | S3 + RDS PostgreSQL              | -                             | -                       |
 
-**Estrategia de custo**:
-- Fase 1 (teste/POC): use a coluna "Instancia para Teste" para validar o fluxo end-to-end com custo minimo.
-- Fase 2 (producao): substitua pelas instancias da coluna "Producao" apenas apos confirmar que o pipeline funciona.
-- Use Spot Instances para o Spark cluster sempre que possivel (economia de ate 70%).
+**Cost Strategy**:
+- Phase 1 (test/POC): use the "Test Instance" column to validate end-to-end flow at minimum cost.
+- Phase 2 (production): only upgrade to the "Production Instance" column after confirming the pipeline works.
+- Use Spot Instances for the Spark cluster whenever possible (up to 70% savings).
 
-## Arquivos do Projeto (estrutura sugerida)
+## Project Files (suggested structure)
 
 ```
 vLLM-project/
-|-- README.md                    <- Este plano
+|-- README.md                    <- This plan
 |-- infrastructure/
-|   |-- terraform/               <- IaC para AWS (VPC, EC2, EMR, Security Groups)
+|   |-- terraform/               <- IaC for AWS (VPC, EC2, EMR, Security Groups)
 |   |-- docker/
-|       |-- vllm/                <- Dockerfile para servidor vLLM
-|       |-- weaviate/            <- Docker Compose para Weaviate (se escolhido)
+|       |-- vllm/                <- Dockerfile for vLLM server
+|       |-- weaviate/            <- Docker Compose for Weaviate (if chosen)
 |-- spark_jobs/
-|   |-- embedding_pipeline.py    <- Job Spark principal
-|   |-- config.py                <- Configuracoes (URLs, credenciais)
+|   |-- embedding_pipeline.py    <- Main Spark job
+|   |-- config.py                <- Configurations (URLs, credentials)
 |-- api/
-|   |-- main.py                  <- FastAPI com endpoints RAG
-|   |-- rag_service.py           <- Logica de retrieval + generation
+|   |-- main.py                  <- FastAPI with RAG endpoints
+|   |-- rag_service.py           <- Retrieval + generation logic
 |-- notebooks/
-|   |-- exploracao.ipynb         <- Testes e validacao
+|   |-- exploration.ipynb        <- Tests and validation
 ```
 
-## Proximos Passos
+## Next Steps
 
-1. Escolher vector database definitivo (Weaviate recomendado).
-2. Criar Terraform/IaC para provisionar VPC, EC2 GPU (vLLM), EMR, e vector DB.
-3. Desenvolver job Spark de embedding e testar localmente.
-4. Subir vLLM em EC2 e validar endpoints de embedding e chat.
-5. Desenvolver API FastAPI integrando retrieval + vLLM generation.
-6. Teste end-to-end na AWS.
+1. Choose final vector database (Weaviate recommended).
+2. Create Terraform/IaC to provision VPC, EC2 GPU (vLLM), EMR, and vector DB.
+3. Develop Spark embedding job and test locally.
+4. Deploy vLLM on EC2 and validate embedding and chat endpoints.
+5. Develop FastAPI integrating retrieval + vLLM generation.
+6. End-to-end test on AWS.
