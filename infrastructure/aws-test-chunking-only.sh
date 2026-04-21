@@ -57,8 +57,10 @@ BUCKET_NAME=$(echo "$S3_OUTPUT_PATH" | sed -n 's|s3a*://\([^/]*\).*|\1|p')
 [ -z "$BUCKET_NAME" ] && error "Could not extract bucket name from S3_OUTPUT_PATH."
 info "Target S3 bucket: $BUCKET_NAME"
 
-BUCKET_EXISTS=$(aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" 2>&1 || true)
-if [ -n "$BUCKET_EXISTS" ]; then
+# Check if bucket exists — head-bucket returns 0 on success, non-zero on failure
+if aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" 2>/dev/null; then
+    info "Bucket already exists: $BUCKET_NAME"
+else
     warn "Bucket '$BUCKET_NAME' not found. Creating it..."
     if [ "$AWS_REGION" == "us-east-1" ]; then
         aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION"
@@ -66,8 +68,6 @@ if [ -n "$BUCKET_EXISTS" ]; then
         aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --create-bucket-configuration LocationConstraint="$AWS_REGION"
     fi
     info "Created bucket: $BUCKET_NAME"
-else
-    info "Bucket already exists: $BUCKET_NAME"
 fi
 
 # ---------------------------------------------------------------------------
