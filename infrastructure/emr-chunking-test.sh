@@ -9,10 +9,10 @@ set -e
 # auto-terminates when done.
 #
 # Cost estimate (us-east-1, Spot):
-#   1 x m5.xlarge master  ~ $0.05/hr
-#   1 x m5.xlarge core    ~ $0.05/hr
-#   EMR surcharge           ~ 6.5%
-#   Total                  ~ $0.11/hr  => under $1 for a full test run
+#   1 x m5.large master   ~ $0.03/hr
+#   1 x m5.large core     ~ $0.03/hr
+#   EMR surcharge          ~ 6.5%
+#   Total                 ~ $0.06/hr  => ~$0.20 for a full test run
 #
 # Usage:
 #   export S3_OUTPUT_PATH=s3a://vllm-chunking/cord19-chunks/
@@ -22,8 +22,8 @@ set -e
 
 AWS_REGION=${AWS_REGION:-us-east-1}
 KEY_NAME=${KEY_NAME:-""}
-MASTER_INSTANCE=${MASTER_INSTANCE:-m5.xlarge}
-CORE_INSTANCE=${CORE_INSTANCE:-m5.xlarge}
+MASTER_INSTANCE=${MASTER_INSTANCE:-m5.large}
+CORE_INSTANCE=${CORE_INSTANCE:-m5.large}
 CORE_COUNT=${CORE_COUNT:-1}
 PROJECT_TAG="spark-vlm-rag-emr-test"
 
@@ -207,8 +207,8 @@ build_emr_args() {
     )
     if [ "$SPOT" == "yes" ]; then
         ARGS+=(--instance-groups
-            "InstanceGroupType=MASTER,InstanceCount=1,InstanceType=$MASTER_INSTANCE,Name=Master,Market=SPOT,BidPrice=0.15"
-            "InstanceGroupType=CORE,InstanceCount=$CORE_COUNT,InstanceType=$CORE_INSTANCE,Name=Core,Market=SPOT,BidPrice=0.15")
+            "InstanceGroupType=MASTER,InstanceCount=1,InstanceType=$MASTER_INSTANCE,Name=Master,Market=SPOT,BidPrice=0.08"
+            "InstanceGroupType=CORE,InstanceCount=$CORE_COUNT,InstanceType=$CORE_INSTANCE,Name=Core,Market=SPOT,BidPrice=0.08")
     else
         ARGS+=(--instance-groups
             "InstanceGroupType=MASTER,InstanceCount=1,InstanceType=$MASTER_INSTANCE,Name=Master"
