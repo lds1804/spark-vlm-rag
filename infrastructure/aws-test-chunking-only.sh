@@ -220,7 +220,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Wait for running state
+# Wait for running state + get IP
 # ---------------------------------------------------------------------------
 info "Waiting for instance to be running..."
 aws ec2 wait instance-running --region "$AWS_REGION" --instance-ids "$INSTANCE_ID"
@@ -229,41 +229,8 @@ sleep 5
 PUBLIC_IP=$(aws ec2 describe-instances --region "$AWS_REGION" --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
 
 # ---------------------------------------------------------------------------
-# Output
-# ---------------------------------------------------------------------------
-echo ""
-echo "============================================================================="
-echo "                    CHUNK-ONLY TEST INSTANCE RUNNING"
-echo "============================================================================="
-echo ""
-echo "  Instance ID: $INSTANCE_ID"
-echo "  Public IP:   $PUBLIC_IP"
-if [ -n "$KEY_NAME" ]; then
-    echo "  SSH:         ssh -i ${KEY_NAME}.pem ubuntu@$PUBLIC_IP"
-fi
-echo ""
-echo "  The instance will automatically:"
-echo "    1. Install Spark"
-echo "    2. Clone the repo"
-echo "    3. Run chunk_only_pipeline.py -> $S3_OUTPUT_PATH"
-echo "    4. Shut itself down when finished (or on failure)"
-echo ""
-echo "  Monitor progress live:"
-if [ -n "$KEY_NAME" ]; then
-    echo "    ssh -i ${KEY_NAME}.pem ubuntu@$PUBLIC_IP 'sudo tail -f /var/log/chunk-test.log'"
-else
-    echo "    (No KEY_NAME set — SSH not available. Use AWS Systems Manager Session Manager instead.)"
-fi
-echo ""
-echo "  Check S3 output:"
-echo "    aws s3 ls ${S3_OUTPUT_PATH/s3a:/s3:}"
-echo ""
-echo "  To cancel and terminate immediately:"
-echo "    aws ec2 terminate-instances --region $AWS_REGION --instance-ids $INSTANCE_ID"
-echo ""
-echo "============================================================================="
-
 # Save reference file
+# ---------------------------------------------------------------------------
 cat > "chunk-test-instance.txt" <<EOF
 INSTANCE_ID=$INSTANCE_ID
 PUBLIC_IP=$PUBLIC_IP
@@ -272,4 +239,83 @@ REGION=$AWS_REGION
 S3_OUTPUT_PATH=$S3_OUTPUT_PATH
 EOF
 
-info "Instance details saved to: chunk-test-instance.txt"
+echo ""
+echo "============================================================================="
+echo "                    CHUNK-ONLY TEST INSTANCE RUNNING"
+echo "============================================================================="
+echo ""
+echo "  Instance ID: $INSTANCE_ID"
+echo "  Public IP:   $PUBLIC_IP"
+echo "  Output:      $S3_OUTPUT_PATH"
+echo ""
+echo "============================================================================="
+
+# ---------------------------------------------------------------------------
+# Tail the log in real-time (hold terminal until job finishes)
+# ---------------------------------------------------------------------------
+if [ -n "$KEY_NAME" ] && [ -f "${KEY_NAME}.pem" ]; then
+    SSH_KEY="${KEY_NAME}.pem"
+
+    info "Waiting for SSH to become available on $PUBLIC_IP..."
+    MAX_SSH_ATTEMPTS=60
+    SSH_READY=0
+    for i in $(seq 1 $MAX_SSH_ATTEMPTS); do
+        if ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes ubuntu@$PUBLIC_IP "echo ok" >/dev/null 2>&1; then
+            SSH_READY=1
+            break
+        fi
+        printf "\r  Attempt %d/%d..." "$i" "$MAX_SSH_ATTEMPTS"
+        sleep 5
+    done
+    echo ""
+
+    if [ $SSH_READY -eq 1 ]; then
+        info "SSH connected! Streaming log output (Ctrl+C to detach, instance keeps running)..."
+        echo "-----------------------------------------------------------------------------"
+        # Wait a moment for user-data to start writing to the log
+        sleep 10
+        ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no ubuntu@$PUBLIC_IP "sudo tail -f /var/log/chunk-test.log" 2>/dev/null || true
+        echo ""
+        echo "-----------------------------------------------------------------------------"
+
+        # Check if instance is still running or already terminated
+        INSTANCE_STATE=$(aws ec2 describe-instances --region "$AWS_REGION" --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+
+        if [ "$INSTANCE_STATE" == "stopped" ] || [ "$INSTANCE_STATE" == "terminated" ]; then
+            info "Instance has shut down (state: $INSTANCE_STATE). Job complete."
+        else
+            warn "Instance is still running (state: $INSTANCE_STATE). The job may still be in progress."
+            warn "Check with: ssh -i $SSH_KEY ubuntu@$PUBLIC_IP 'sudo tail -20 /var/log/chunk-test.log'"
+        fi
+    else
+        warn "Could not establish SSH after $MAX_SSH_ATTEMPTS attempts."
+        warn "The instance may still be booting. Try manually:"
+        warn "  ssh -i $SSH_KEY ubuntu@$PUBLIC_IP 'sudo tail -f /var/log/chunk-test.log'"
+    fi
+else
+    warn "No KEY_NAME set or .pem file not found. Cannot tail logs via SSH."
+    warn "Use AWS Systems Manager Session Manager or check S3 output:"
+    warn "  aws s3 ls ${S3_OUTPUT_PATH/s3a:/s3:}"
+    warn ""
+    warn "Waiting for instance to stop (auto-shutdown after job)..."
+    info "Polling instance state (checks every 30s)..."
+    while true; do
+        STATE=$(aws ec2 describe-instances --region "$AWS_REGION" --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+        if [ "$STATE" == "stopped" ] || [ "$STATE" == "terminated" ] || [ "$STATE" == "unknown" ]; then
+            info "Instance state: $STATE. Job likely complete."
+            break
+        fi
+        echo "  [$(date +%H:%M:%S)] Instance state: $STATE — still running..."
+        sleep 30
+    done
+fi
+
+# ---------------------------------------------------------------------------
+# Check S3 output
+# ---------------------------------------------------------------------------
+echo ""
+info "Checking S3 output..."
+aws s3 ls "${S3_OUTPUT_PATH/s3a:/s3:}" 2>/dev/null || warn "No output found at $S3_OUTPUT_PATH yet."
+
+echo ""
+info "Done. Instance details saved to: chunk-test-instance.txt"
