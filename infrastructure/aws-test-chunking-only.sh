@@ -181,16 +181,21 @@ info "Requesting Spot instance ($INSTANCE_TYPE)..."
 SPOT_ARGS=("${BASE_ARGS[@]}")
 SPOT_ARGS+=(--instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time","InstanceInterruptionBehavior":"terminate"}}')
 
-INSTANCE_ID=$(aws ec2 run-instances "${SPOT_ARGS[@]}" --query 'Instances[0].InstanceId' --output text 2>/dev/null)
+SPOT_OUTPUT=$(aws ec2 run-instances "${SPOT_ARGS[@]}" --query 'Instances[0].InstanceId' --output text 2>&1)
+SPOT_EXIT=$?
 
-if [ $? -ne 0 ] || [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
-    warn "Spot capacity unavailable for $INSTANCE_TYPE. Falling back to On-Demand..."
-    INSTANCE_ID=$(aws ec2 run-instances "${BASE_ARGS[@]}" --query 'Instances[0].InstanceId' --output text)
-    if [ $? -ne 0 ] || [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
-        error "On-Demand launch also failed. Check AWS quotas or try a different instance type (export INSTANCE_TYPE=m5a.large)"
+if [ $SPOT_EXIT -ne 0 ] || [ -z "$SPOT_OUTPUT" ] || [ "$SPOT_OUTPUT" == "None" ]; then
+    warn "Spot capacity unavailable for $INSTANCE_TYPE."
+    warn "  Reason: $(echo "$SPOT_OUTPUT" | head -1)"
+    warn "Falling back to On-Demand..."
+    INSTANCE_ID=$(aws ec2 run-instances "${BASE_ARGS[@]}" --query 'Instances[0].InstanceId' --output text 2>&1)
+    ONDEMAND_EXIT=$?
+    if [ $ONDEMAND_EXIT -ne 0 ] || [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+        error "On-Demand launch also failed: $INSTANCE_ID. Try a different instance type (export INSTANCE_TYPE=m5a.large)"
     fi
     info "Launched On-Demand instance: $INSTANCE_ID"
 else
+    INSTANCE_ID="$SPOT_OUTPUT"
     info "Launched Spot instance: $INSTANCE_ID"
 fi
 
