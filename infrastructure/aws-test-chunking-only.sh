@@ -159,10 +159,10 @@ AMI=$(aws ec2 describe-images --region "$AWS_REGION" --owners 099720109477 \
 info "AMI: $AMI"
 
 # ---------------------------------------------------------------------------
-# Launch Spot instance
+# Launch instance — try Spot first, fall back to On-Demand
 # ---------------------------------------------------------------------------
 
-RUN_ARGS=(
+BASE_ARGS=(
     --region "$AWS_REGION"
     --image-id "$AMI"
     --instance-type "$INSTANCE_TYPE"
@@ -171,16 +171,28 @@ RUN_ARGS=(
     --iam-instance-profile "Name=$PROFILE_NAME"
     --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":30,"VolumeType":"gp3"}}]'
     --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${PROJECT_TAG}},{Key=Project,Value=${PROJECT_TAG}}]"
-    --instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time","InstanceInterruptionBehavior":"terminate"}}'
 )
 
 if [ -n "$KEY_NAME" ]; then
-    RUN_ARGS+=(--key-name "$KEY_NAME")
+    BASE_ARGS+=(--key-name "$KEY_NAME")
 fi
 
-info "Requesting Spot instance..."
-INSTANCE_ID=$(aws ec2 run-instances "${RUN_ARGS[@]}" --query 'Instances[0].InstanceId' --output text)
-info "Launched instance: $INSTANCE_ID"
+info "Requesting Spot instance ($INSTANCE_TYPE)..."
+SPOT_ARGS=("${BASE_ARGS[@]}")
+SPOT_ARGS+=(--instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time","InstanceInterruptionBehavior":"terminate"}}')
+
+INSTANCE_ID=$(aws ec2 run-instances "${SPOT_ARGS[@]}" --query 'Instances[0].InstanceId' --output text 2>/dev/null)
+
+if [ $? -ne 0 ] || [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+    warn "Spot capacity unavailable for $INSTANCE_TYPE. Falling back to On-Demand..."
+    INSTANCE_ID=$(aws ec2 run-instances "${BASE_ARGS[@]}" --query 'Instances[0].InstanceId' --output text)
+    if [ $? -ne 0 ] || [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+        error "On-Demand launch also failed. Check AWS quotas or try a different instance type (export INSTANCE_TYPE=m5a.large)"
+    fi
+    info "Launched On-Demand instance: $INSTANCE_ID"
+else
+    info "Launched Spot instance: $INSTANCE_ID"
+fi
 
 # ---------------------------------------------------------------------------
 # Wait for running state
