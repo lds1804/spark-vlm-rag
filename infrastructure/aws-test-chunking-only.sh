@@ -127,10 +127,22 @@ SG_ID=$(aws ec2 describe-security-groups --region "$AWS_REGION" --filters Name=g
 if [ -z "$SG_ID" ] || [ "$SG_ID" == "None" ]; then
     info "Creating security group '$SG_NAME' in VPC $VPC_ID..."
     SG_ID=$(aws ec2 create-security-group --region "$AWS_REGION" --group-name "$SG_NAME" --description "SG for chunking test" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
-    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 22 --cidr 0.0.0.0/0 >/dev/null || true
-    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 8000 --cidr 0.0.0.0/0 >/dev/null || true
-    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol all --source-group "$SG_ID" >/dev/null || true
-    info "Created security group: $SG_ID"
+
+    # Ingress: SSH only from caller's IP
+    CALLER_IP=$(curl -s https://checkip.amazonaws.com)/32
+    info "Your public IP: $CALLER_IP — restricting SSH to this IP"
+    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$CALLER_IP" >/dev/null || true
+
+    # Egress: HTTPS (S3, apt, pip, git), HTTP (apt repos), DNS (TCP+UDP)
+    aws ec2 authorize-security-group-egress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 443 --cidr 0.0.0.0/0 >/dev/null || true
+    aws ec2 authorize-security-group-egress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 80 --cidr 0.0.0.0/0 >/dev/null || true
+    aws ec2 authorize-security-group-egress --region "$AWS_REGION" --group-id "$SG_ID" --protocol udp --port 53 --cidr 0.0.0.0/0 >/dev/null || true
+    aws ec2 authorize-security-group-egress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 53 --cidr 0.0.0.0/0 >/dev/null || true
+
+    # Remove default all-traffic egress rule that AWS creates automatically
+    aws ec2 revoke-security-group-egress --region "$AWS_REGION" --group-id "$SG_ID" --protocol all --cidr 0.0.0.0/0 >/dev/null || true
+
+    info "Created security group: $SG_ID (tight rules)"
 else
     info "Using existing security group: $SG_ID"
 fi
