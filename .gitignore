@@ -1,6 +1,7 @@
 # AWS Key Pairs
 *.pem
 
+aws/
 # Python
 __pycache__/
 *.py[cod]
