@@ -13,8 +13,12 @@ Environment variables:
 import requests
 import json
 from typing import List, Dict
+import pandas as pd
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import udf, explode, col, monotonically_increasing_id, lit
+from pyspark.sql.functions import (
+    explode, col, monotonically_increasing_id,
+    regexp_replace, trim, pandas_udf,
+)
 from pyspark.sql.types import ArrayType, StringType, StructType, StructField, FloatType
 
 import config
@@ -100,22 +104,18 @@ def main():
     df = spark.read.parquet(input_path)
 
     # Assume schema: (doc_id: string, raw_text: string, source: string)
-    # 1. Clean text (basic UDF example)
-    @udf(StringType())
-    def clean_text(text):
-        if not text:
-            return ""
-        # Basic cleaning: strip, collapse whitespace
-        return " ".join(str(text).split())
+    # 1. Clean text using native Spark SQL functions
+    df_clean = df.withColumn(
+        "cleaned_text",
+        trim(regexp_replace(col("raw_text"), r"\s+", " ")),
+    )
 
-    df_clean = df.withColumn("cleaned_text", clean_text(col("raw_text")))
-
-    # 2. Chunking UDF -> array of chunks
-    chunk_schema = ArrayType(StringType())
-
-    @udf(chunk_schema)
-    def chunk_udf(text):
-        return chunk_text(text, config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+    # 2. Chunking with a Pandas UDF (vectorised, much faster than row-at-a-time UDF)
+    @pandas_udf(ArrayType(StringType()))
+    def chunk_udf(texts: pd.Series) -> pd.Series:
+        return texts.apply(
+            lambda t: chunk_text(t, config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+        )
 
     df_chunks = (
         df_clean
@@ -124,40 +124,29 @@ def main():
         .withColumn("chunk_id", monotonically_increasing_id())
     )
 
-    # Optional: repartition after explode if chunk count explodes
-    df_chunks = df_chunks.repartition(200)
+    # Let AQE handle partitioning instead of a hard-coded repartition.
+    # If you still see skew, uncomment the line below:
+    # df_chunks = df_chunks.repartition(200)
 
-    # 3. Generate embeddings via vLLM
-    # Collect chunks per partition to batch requests
-    def process_partition(rows):
-        texts = []
-        metadata = []
-        for row in rows:
-            texts.append(row.chunk_text)
-            metadata.append({
-                "doc_id": row.doc_id,
-                "chunk_id": row.chunk_id,
-                "chunk_text": row.chunk_text,
-                "source": row.source
-            })
-
-        embeddings = get_embeddings(texts)
-
-        for meta, emb in zip(metadata, embeddings):
-            meta["embedding"] = emb
-            yield meta
-
-    # Convert to RDD, mapPartitions for batching, then back to DataFrame
+    # 3. Generate embeddings via vLLM using mapInPandas
+    # mapInPandas yields a pandas DataFrame per iterator batch, allowing
+    # efficient batched HTTP calls to the embedding endpoint.
     embedding_schema = StructType([
         StructField("doc_id", StringType(), True),
         StructField("chunk_id", StringType(), True),
         StructField("chunk_text", StringType(), True),
         StructField("source", StringType(), True),
-        StructField("embedding", ArrayType(FloatType()), True)
+        StructField("embedding", ArrayType(FloatType()), True),
     ])
 
-    rdd = df_chunks.rdd.mapPartitions(process_partition)
-    df_embeddings = spark.createDataFrame(rdd, embedding_schema)
+    def embed_batch(iterator):
+        for pdf in iterator:
+            texts = pdf["chunk_text"].tolist()
+            embs = get_embeddings(texts)
+            pdf["embedding"] = embs
+            yield pdf
+
+    df_embeddings = df_chunks.mapInPandas(embed_batch, schema=embedding_schema)
 
     # 4. Write to vector DB or S3 for later loading
     # Option A: Write to S3 as Parquet (then load into Weaviate/Milvus)
