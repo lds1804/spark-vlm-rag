@@ -121,15 +121,23 @@ SUBNET_ID=$(aws ec2 describe-subnets --region "$AWS_REGION" --filters Name=vpc-i
 # Security group (allow SSH for debug; open egress for S3 access)
 # ---------------------------------------------------------------------------
 SG_NAME="${PROJECT_TAG}-sg"
-SG_ID=$(aws ec2 describe-security-groups --region "$AWS_REGION" --filters Name=group-name,Values="$SG_NAME" Name=vpc-id,Values="$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "none")
+SG_ID=$(aws ec2 describe-security-groups --region "$AWS_REGION" --filters Name=group-name,Values="$SG_NAME" Name=vpc-id,Values="$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
 
-if [ "$SG_ID" == "none" ]; then
+# Normalize: AWS CLI can return literal "None" when nothing is found
+if [ -z "$SG_ID" ] || [ "$SG_ID" == "None" ]; then
+    info "Creating security group '$SG_NAME' in VPC $VPC_ID..."
     SG_ID=$(aws ec2 create-security-group --region "$AWS_REGION" --group-name "$SG_NAME" --description "SG for chunking test" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
-    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 22 --cidr 0.0.0.0/0 >/dev/null
-    aws ec2 authorize-security-group-egress  --region "$AWS_REGION" --group-id "$SG_ID" --protocol all --cidr 0.0.0.0/0 >/dev/null || true
+    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 22 --cidr 0.0.0.0/0 >/dev/null || true
+    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol tcp --port 8000 --cidr 0.0.0.0/0 >/dev/null || true
+    aws ec2 authorize-security-group-ingress --region "$AWS_REGION" --group-id "$SG_ID" --protocol all --source-group "$SG_ID" >/dev/null || true
     info "Created security group: $SG_ID"
 else
     info "Using existing security group: $SG_ID"
+fi
+
+# Final sanity check
+if [ -z "$SG_ID" ] || [ "$SG_ID" == "None" ]; then
+    error "Security group ID is still empty after creation attempt. Check AWS permissions."
 fi
 
 # ---------------------------------------------------------------------------
@@ -153,8 +161,6 @@ info "AMI: $AMI"
 # ---------------------------------------------------------------------------
 # Launch Spot instance
 # ---------------------------------------------------------------------------
-# Validate SG_ID is not empty before launch
-[ -z "$SG_ID" ] || [ "$SG_ID" == "None" ] && error "Security group ID is empty. Cannot launch instance."
 
 RUN_ARGS=(
     --region "$AWS_REGION"
