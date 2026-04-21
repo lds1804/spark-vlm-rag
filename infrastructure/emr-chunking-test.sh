@@ -202,6 +202,8 @@ build_emr_args() {
         --auto-termination-policy IdleTimeout=300
         --tags "Project=$PROJECT_TAG"
         --ec2-attributes "$EC2_ATTRS"
+        --bootstrap-actions Path="s3://elasticmapreduce/bootstrap-actions/run-if",Args=["instance.isMaster=true,sudo pip3 install pandas"]
+        --bootstrap-actions Path="s3://elasticmapreduce/bootstrap-actions/run-if",Args=["instance.isCore=true,sudo pip3 install pandas"]
     )
     if [ "$SPOT" == "yes" ]; then
         ARGS+=(--instance-groups
