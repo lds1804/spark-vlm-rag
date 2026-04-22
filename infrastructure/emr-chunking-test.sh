@@ -22,8 +22,8 @@ set -e
 
 AWS_REGION=${AWS_REGION:-us-east-1}
 KEY_NAME=${KEY_NAME:-""}
-MASTER_INSTANCE=${MASTER_INSTANCE:-m5.large}
-CORE_INSTANCE=${CORE_INSTANCE:-m5.large}
+MASTER_INSTANCE=${MASTER_INSTANCE:-m5.xlarge}
+CORE_INSTANCE=${CORE_INSTANCE:-m5.xlarge}
 CORE_COUNT=${CORE_COUNT:-1}
 PROJECT_TAG="spark-vlm-rag-emr-test"
 
@@ -183,57 +183,85 @@ EC2_ATTRS="SubnetId=${SUBNET_ID},InstanceProfile=${EMR_EC2_ROLE},AdditionalMaste
 [ -n "$KEY_NAME" ] && EC2_ATTRS="KeyName=${KEY_NAME},${EC2_ATTRS}"
 
 # ---------------------------------------------------------------------------
+# Debug/Persistence Logic: Check for existing cluster
+# ---------------------------------------------------------------------------
+SESSION_FILE="emr-session.env"
+[ -f "$SESSION_FILE" ] && source "$SESSION_FILE"
+
+if [ -n "$CLUSTER_ID" ]; then
+    step "Checking if existing cluster $CLUSTER_ID is still active..."
+    STATE=$(aws emr describe-cluster --cluster-id "$CLUSTER_ID" --region "$AWS_REGION" --query 'Cluster.Status.State' --output text 2>/dev/null || echo "not-found")
+    if [[ "$STATE" =~ ^(WAITING|RUNNING|STARTING|BOOTSTRAPPING)$ ]]; then
+        info "Re-using existing cluster: $CLUSTER_ID (State: $STATE)"
+        SKIP_LAUNCH=true
+    else
+        warn "Cluster $CLUSTER_ID is in state $STATE. Launching a new one..."
+        unset CLUSTER_ID
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Launch EMR cluster (Spot, fallback to On-Demand)
 # ---------------------------------------------------------------------------
 phase "LAUNCH EMR CLUSTER"
 
-CLUSTER_NAME="chunking-test-$(date +%Y%m%d-%H%M%S)"
-step "Cluster name: $CLUSTER_NAME"
+if [ "$SKIP_LAUNCH" = true ]; then
+    step "Skipping cluster creation."
+else
+    CLUSTER_NAME="chunking-test-$(date +%Y%m%d-%H%M%S)"
+    step "Cluster name: $CLUSTER_NAME"
 
-build_emr_args() {
-    local SPOT="$1"
-    local ARGS=(
-        --name "$CLUSTER_NAME"
-        --region "$AWS_REGION"
-        --release-label emr-7.3.0
-        --applications Name=Spark Name=Hadoop
-        --service-role "$EMR_ROLE"
-        --log-uri "$EMR_LOG_PATH"
-        --auto-termination-policy IdleTimeout=300
-        --tags "Project=$PROJECT_TAG"
-        --ec2-attributes "$EC2_ATTRS"
-        --bootstrap-actions Path="s3://elasticmapreduce/bootstrap-actions/run-if",Args=["instance.isMaster=true,sudo pip3 install pandas pyarrow numpy requests boto3"]
-        --bootstrap-actions Path="s3://elasticmapreduce/bootstrap-actions/run-if",Args=["instance.isCore=true,sudo pip3 install pandas pyarrow numpy requests boto3"]
-    )
-    if [ "$SPOT" == "yes" ]; then
-        ARGS+=(--instance-groups
-            "InstanceGroupType=MASTER,InstanceCount=1,InstanceType=$MASTER_INSTANCE,Name=Master,Market=SPOT,BidPrice=0.08"
-            "InstanceGroupType=CORE,InstanceCount=$CORE_COUNT,InstanceType=$CORE_INSTANCE,Name=Core,Market=SPOT,BidPrice=0.08")
-    else
-        ARGS+=(--instance-groups
-            "InstanceGroupType=MASTER,InstanceCount=1,InstanceType=$MASTER_INSTANCE,Name=Master"
-            "InstanceGroupType=CORE,InstanceCount=$CORE_COUNT,InstanceType=$CORE_INSTANCE,Name=Core")
-    fi
-    echo "${ARGS[@]}"
-}
+    try_launch_cluster() {
+        local SPOT="$1"
+        local ARGS=(
+            --name "$CLUSTER_NAME"
+            --region "$AWS_REGION"
+            --release-label emr-7.3.0
+            --applications Name=Spark Name=Hadoop
+            --service-role "$EMR_ROLE"
+            --log-uri "$EMR_LOG_PATH"
+            --auto-termination-policy IdleTimeout=14400 # 4 hours for debug mode
+            --tags "Project=$PROJECT_TAG"
+            --ec2-attributes "$EC2_ATTRS"
+            --bootstrap-actions
+            "Path=${JOB_S3_PREFIX}emr-bootstrap.sh"
+        )
+        if [ "$SPOT" == "yes" ]; then
+            ARGS+=(--instance-groups
+                "InstanceGroupType=MASTER,InstanceCount=1,InstanceType=$MASTER_INSTANCE,Name=Master,Market=SPOT,BidPrice=0.15"
+                "InstanceGroupType=CORE,InstanceCount=$CORE_COUNT,InstanceType=$CORE_INSTANCE,Name=Core,Market=SPOT,BidPrice=0.15")
+        else
+            ARGS+=(--instance-groups
+                "InstanceGroupType=MASTER,InstanceCount=1,InstanceType=$MASTER_INSTANCE,Name=Master"
+                "InstanceGroupType=CORE,InstanceCount=$CORE_COUNT,InstanceType=$CORE_INSTANCE,Name=Core")
+        fi
+        aws emr create-cluster "${ARGS[@]}" --query ClusterId --output text 2>&1
+    }
 
-step "Trying Spot cluster..."
-set +e
-CLUSTER_ID=$(aws emr create-cluster $(build_emr_args yes) --query ClusterId --output text 2>&1)
-CREATE_EXIT=$?
-set -e
-
-if [ $CREATE_EXIT -ne 0 ] || [ -z "$CLUSTER_ID" ] || [ "$CLUSTER_ID" == "None" ]; then
-    warn "Spot failed: $(echo "$CLUSTER_ID" | head -1)"
-    warn "Falling back to On-Demand..."
+    step "Trying Spot cluster..."
     set +e
-    CLUSTER_ID=$(aws emr create-cluster $(build_emr_args no) --query ClusterId --output text 2>&1)
+    RESULT=$(try_launch_cluster yes)
     CREATE_EXIT=$?
     set -e
-    [ $CREATE_EXIT -ne 0 ] || [ -z "$CLUSTER_ID" ] || [ "$CLUSTER_ID" == "None" ] && error "EMR creation failed: $CLUSTER_ID"
-    info "Launched On-Demand cluster: $CLUSTER_ID"
-else
-    info "Launched Spot cluster: $CLUSTER_ID"
+
+    if [ $CREATE_EXIT -ne 0 ] || [ -z "$RESULT" ] || [ "$RESULT" == "None" ]; then
+        warn "Spot failed: $(echo "$RESULT" | head -1)"
+        warn "Falling back to On-Demand..."
+        set +e
+        RESULT=$(try_launch_cluster no)
+        CREATE_EXIT=$?
+        set -e
+        [ $CREATE_EXIT -ne 0 ] || [ -z "$RESULT" ] || [ "$RESULT" == "None" ] && error "EMR creation failed: $RESULT"
+        CLUSTER_ID="$RESULT"
+        info "Launched On-Demand cluster: $CLUSTER_ID"
+    else
+        CLUSTER_ID="$RESULT"
+        info "Launched Spot cluster: $CLUSTER_ID"
+    fi
+
+    # Persist for next run
+    echo "export CLUSTER_ID=$CLUSTER_ID" > "$SESSION_FILE"
+    info "Cluster ID persisted to $SESSION_FILE"
 fi
 
 cat > "emr-test-cluster.txt" <<EOF
@@ -282,11 +310,14 @@ phase "SUBMIT SPARK JOB"
 
 step "Submitting chunk_only_pipeline.py as Spark step..."
 
-STEP_ID=$(aws emr add-steps \
-    --cluster-id "$CLUSTER_ID" \
-    --region "$AWS_REGION" \
-    --steps "Type=Spark,Name=CORD19-ChunkOnly,ActionOnFailure=CONTINUE,Args=[--master,yarn,--deploy-mode,client,--conf,spark.sql.adaptive.enabled=true,--conf,spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.AnonymousAWSCredentialsProvider,--conf,spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem,--py-files,${JOB_S3_PREFIX}config.py,${JOB_S3_PREFIX}chunk_only_pipeline.py]" \
-    --query 'StepIds[0]' --output text)
+    # Normalize S3_OUTPUT_PATH to use s3:// protocol for EMRFS compatibility
+    EMRFS_OUTPUT_PATH="${S3_OUTPUT_PATH/s3a:/s3:}"
+    
+    STEP_ID=$(aws emr add-steps \
+        --cluster-id "$CLUSTER_ID" \
+        --region "$AWS_REGION" \
+        --steps "Type=Spark,Name=CORD19-ChunkOnly,ActionOnFailure=CONTINUE,Args=[--master,yarn,--deploy-mode,client,--conf,spark.sql.adaptive.enabled=true,--py-files,${JOB_S3_PREFIX}config.py,${JOB_S3_PREFIX}chunk_only_pipeline.py,${EMRFS_OUTPUT_PATH}]" \
+        --query 'StepIds[0]' --output text)
 
 info "Step submitted: $STEP_ID"
 STEP_LOG_PREFIX="s3://$BUCKET_NAME/emr-logs/${CLUSTER_ID}/steps/${STEP_ID}/"
@@ -384,18 +415,24 @@ fi
 # ---------------------------------------------------------------------------
 phase "SHUTDOWN"
 
-set +e
-read -t 15 -p "  Terminate cluster now? [Y/n] " TERMINATE_CHOICE 2>/dev/null || TERMINATE_CHOICE="y"
-echo ""
-set -e
-
-if [[ "$TERMINATE_CHOICE" =~ ^[Nn] ]]; then
-    warn "Cluster $CLUSTER_ID left running (auto-terminates after 5 min idle)."
-    warn "Manual termination: aws emr terminate-clusters --cluster-ids $CLUSTER_ID"
+if [ "$SKIP_LAUNCH" = true ]; then
+    warn "Debug Mode: Skipping termination to keep cluster $CLUSTER_ID alive."
+    info "Manual termination: aws emr terminate-clusters --cluster-ids $CLUSTER_ID"
 else
-    step "Terminating cluster $CLUSTER_ID ..."
-    aws emr terminate-clusters --cluster-ids "$CLUSTER_ID" --region "$AWS_REGION"
-    info "Cluster termination requested."
+    set +e
+    read -t 15 -p "  Terminate cluster now? [Y/n] " TERMINATE_CHOICE 2>/dev/null || TERMINATE_CHOICE="y"
+    echo ""
+    set -e
+
+    if [[ "$TERMINATE_CHOICE" =~ ^[Nn] ]]; then
+        warn "Cluster $CLUSTER_ID left running (auto-terminates after 4 hours idle)."
+        warn "Manual termination: aws emr terminate-clusters --cluster-ids $CLUSTER_ID"
+    else
+        step "Terminating cluster $CLUSTER_ID ..."
+        aws emr terminate-clusters --cluster-ids "$CLUSTER_ID" --region "$AWS_REGION"
+        info "Cluster termination requested."
+        rm -f "$SESSION_FILE"
+    fi
 fi
 
 # ---------------------------------------------------------------------------

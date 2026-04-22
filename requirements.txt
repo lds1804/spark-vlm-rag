@@ -1,0 +1,7 @@
+boto3
+requests
+lancedb
+pyarrow
+pyspark
+pandas
+botocore[crt]

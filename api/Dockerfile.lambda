@@ -1,0 +1,16 @@
+FROM public.ecr.aws/lambda/python:3.11
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy function code
+COPY lambda_function.py .
+
+# Pre-download the embedding model to the container to avoid cold start downloads
+RUN python -c "from llama_index.embeddings.huggingface import HuggingFaceEmbedding; HuggingFaceEmbedding(model_name='BAAI/bge-small-en-v1.5')._model"
+
+# Command to run the Lambda function
+CMD [ "lambda_function.handler" ]

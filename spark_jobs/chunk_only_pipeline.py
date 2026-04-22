@@ -44,11 +44,8 @@ def main():
         SparkSession.builder
         .appName("CORD19-ChunkOnly")
         .master(config.SPARK_MASTER)
-        .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
-        # Anonymous access for public CORD-19 S3 bucket (override EMR defaults)
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.AnonymousAWSCredentialsProvider")
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.AnonymousAWSCredentialsProvider")
+        .config("spark.hadoop.fs.s3a.endpoint", "s3.us-west-2.amazonaws.com")
         .getOrCreate()
     )
 
@@ -86,7 +83,13 @@ def main():
     )
 
     # 5. Write chunks to S3
-    output_path = config.S3_OUTPUT_PATH or "s3a://my-bucket/cord19-chunks/"
+    import sys
+    if len(sys.argv) > 1:
+        output_path = sys.argv[1]
+    else:
+        output_path = config.S3_OUTPUT_PATH or "s3://vllm-chunking/cord19-chunks/"
+
+    print(f"Writing output to: {output_path}")
     df_chunks.write.mode("overwrite").parquet(output_path)
 
     total_chunks = df_chunks.count()
