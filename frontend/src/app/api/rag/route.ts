@@ -62,11 +62,12 @@ export async function POST(req: NextRequest) {
 
     if (!context) {
       return NextResponse.json({
-        answer: "Não encontrei conteúdo relevante no banco de dados. Execute a ingestão primeiro.",
+        answer: "I couldn't find relevant content in the database. Please perform the ingestion first.",
         sources: [],
       });
     }
 
+    const startTime = Date.now();
     // 4. Call Groq for final answer
     const llm = Settings.llm as Groq;
     const response = await llm.chat({
@@ -74,7 +75,7 @@ export async function POST(req: NextRequest) {
         {
           role: "system",
           content:
-            "You are a helpful research assistant. Answer the user's question based ONLY on the provided context. Be concise and cite the relevant information.",
+            "You are an expert Research Assistant. Your goal is to provide accurate, comprehensive, and evidence-based answers based ONLY on the provided context retrieved from a database of scientific chunks. Cite sources if available in metadata and be technical and precise.",
         },
         {
           role: "user",
@@ -83,14 +84,27 @@ export async function POST(req: NextRequest) {
       ],
     });
 
+    const endTime = Date.now();
+    const latency = endTime - startTime;
     const answer = response.message?.content ?? "No answer generated.";
+
+    // Estimated cost logic (Groq Llama 3.3 70B: ~$0.79 per 1M tokens)
+    // Approx 1 token = 4 chars. Context + Answer length.
+    const estTokens = (context.length + answer.length) / 4;
+    const estCost = (estTokens / 1_000_000) * 0.79;
 
     // 5. Return answer + sources for the UI Source Attribution panel
     return NextResponse.json({
       answer,
+      latency,
+      costEstimate: estCost.toFixed(5),
       sources: results.map((r: any) => ({
         text: (r.chunk_text || r.text || "").substring(0, 300),
-        metadata: { doc_id: r.doc_id, source: r.source },
+        metadata: { 
+          doc_id: r.doc_id, 
+          source: r.source,
+          title: r.title 
+        },
       })),
     });
   } catch (error: any) {
