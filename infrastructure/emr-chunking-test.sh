@@ -308,15 +308,12 @@ MASTER_DNS=$(aws emr describe-cluster --cluster-id "$CLUSTER_ID" --region "$AWS_
 # ---------------------------------------------------------------------------
 phase "SUBMIT SPARK JOB"
 
-step "Submitting chunk_only_pipeline.py as Spark step..."
-
-    # Normalize S3_OUTPUT_PATH to use s3:// protocol for EMRFS compatibility
-    EMRFS_OUTPUT_PATH="${S3_OUTPUT_PATH/s3a:/s3:}"
+    SUBMIT_JOB=${SUBMIT_JOB:-ingest_to_lancedb.py}
     
     STEP_ID=$(aws emr add-steps \
         --cluster-id "$CLUSTER_ID" \
         --region "$AWS_REGION" \
-        --steps "Type=Spark,Name=CORD19-ChunkOnly,ActionOnFailure=CONTINUE,Args=[--master,yarn,--deploy-mode,client,--conf,spark.sql.adaptive.enabled=true,--py-files,${JOB_S3_PREFIX}config.py,${JOB_S3_PREFIX}chunk_only_pipeline.py,${EMRFS_OUTPUT_PATH}]" \
+        --steps "Type=Spark,Name=RAG-Ingestion,ActionOnFailure=CONTINUE,Args=[--master,yarn,--deploy-mode,client,--conf,spark.sql.adaptive.enabled=true,--py-files,${JOB_S3_PREFIX}config.py,${JOB_S3_PREFIX}${SUBMIT_JOB},s3://vllm-chunking/cord19-chunks/,s3://vllm-chunking/lancedb/]" \
         --query 'StepIds[0]' --output text)
 
 info "Step submitted: $STEP_ID"
@@ -415,7 +412,7 @@ fi
 # ---------------------------------------------------------------------------
 phase "SHUTDOWN"
 
-if [ "$SKIP_LAUNCH" = true ]; then
+if [ "$SKIP_TERMINATION" = "true" ] || [ "$SKIP_LAUNCH" = "true" ]; then
     warn "Debug Mode: Skipping termination to keep cluster $CLUSTER_ID alive."
     info "Manual termination: aws emr terminate-clusters --cluster-ids $CLUSTER_ID"
 else

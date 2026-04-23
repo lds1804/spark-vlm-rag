@@ -7,8 +7,8 @@ REGION = "us-east-1"
 INSTANCE_TYPE = "g4dn.xlarge"
 IMAGE_ID = "ami-00581b89b09f56ac6" # Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5.1 (Ubuntu 22.04)
 KEY_NAME = "poc-key"
-SECURITY_GROUP_IDS = ["sg-0123456789abcdef0"] # Update with your SG
-SUBNET_ID = "subnet-xxxxxxxx"              # Update with your Subnet
+SECURITY_GROUP_IDS = ["sg-0230efc6d7b64e683"] # Update with your SG
+SUBNET_ID = "subnet-03be2a7610c128465"              # Update with your Subnet
 
 ec2 = boto3.client('ec2', region_name=REGION)
 

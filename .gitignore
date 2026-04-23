@@ -39,3 +39,15 @@ Thumbs.db
 
 # Project specific
 poc-instances-*.txt
+
+# Infrastructure session/state files
+chunk-test-instance.txt
+emr-test-cluster.txt
+emr-session.env
+controller.gz
+infrastructure/chunk-test-instance.txt
+
+# Data samples and cache
+.data_sample
+sample_chunk.parquet
+.hf_cache/

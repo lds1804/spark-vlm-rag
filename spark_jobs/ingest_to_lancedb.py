@@ -22,20 +22,25 @@ def get_spark_session():
         SparkSession.builder
         .appName("LanceDB-Local-CPU-Ingestion")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .config("spark.hadoop.fs.s3a.connection.timeout", "60000")
+        .config("spark.hadoop.fs.s3a.connection.establish.timeout", "60000")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .getOrCreate()
     )
 
 def main():
     spark = get_spark_session()
     
-    # 1. Read EXISTING chunks processed by EMR
-    input_path = config.S3_INPUT_PATH or "s3a://vllm-chunking/cord19-chunks/"
+    import sys
+    input_path = sys.argv[1] if len(sys.argv) > 1 else (config.S3_INPUT_PATH or "s3a://vllm-chunking/cord19-chunks/")
+    db_uri = sys.argv[2] if len(sys.argv) > 2 else config.LANCEDB_URI
+    
     print(f"Reading existing chunks from: {input_path}")
     df = spark.read.parquet(input_path)
     
-    # Limit to 500 rows to quickly test the pipeline end-to-end using CPU
-    print("WARNING: AWS GPU Limit reached. Running on local CPU with a limit of 500 chunks for testing.")
-    df = df.limit(500)
+    # Limit to 5000 rows to expand the knowledge base using CPU
+    print("WARNING: AWS GPU Limit reached. Running on local CPU with a limit of 5000 chunks.")
+    df = df.limit(5000)
     
     # 2. Define the schema for the output
     schema = StructType([
@@ -61,7 +66,6 @@ def main():
 
     
     # 3. Write to LanceDB on S3
-    db_uri = config.LANCEDB_URI
     table_name = config.LANCEDB_TABLE_NAME
     
     def write_to_lancedb(pdf: pd.DataFrame):
