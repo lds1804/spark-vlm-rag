@@ -281,17 +281,27 @@ export default function App() {
 
                   <div className="h-px bg-white/5 w-full" />
                   
-                  {/* Cost Metric */}
-                  <div>
-                    <div className="text-white/30 text-[9px] uppercase font-bold mb-1">Session Estimated Cost</div>
-                    <div className="flex items-baseline gap-2">
-                      <div className="text-xl font-light text-white/90">
-                        ${messages.reduce((acc, m) => {
-                          const val = m.costEstimate?.startsWith('$') ? parseFloat(m.costEstimate.substring(1)) : 0;
-                          return acc + (isNaN(val) ? 0 : val);
-                        }, 0).toFixed(5)}
+                  {/* Cost Metrics */}
+                  <div className="flex flex-col gap-3">
+                    <div>
+                      <div className="text-white/30 text-[9px] uppercase font-bold mb-1">Session API Cost</div>
+                      <div className="flex items-baseline gap-2">
+                        <div className="text-xl font-light text-white/90">
+                          ${messages.reduce((acc, m) => {
+                            const val = m.costEstimate?.startsWith('$') ? parseFloat(m.costEstimate.substring(1)) : 0;
+                            return acc + (isNaN(val) ? 0 : val);
+                          }, 0).toFixed(5)}
+                        </div>
+                        <div className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 rounded">GROQ</div>
                       </div>
-                      <div className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 rounded">ECO</div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center bg-white/[0.03] p-2 rounded-lg border border-white/5">
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-white/30 uppercase font-bold">Est. Lambda Cost</span>
+                        <span className="text-[10px] text-white/60 font-mono">${(messages.length * 0.00001).toFixed(6)}</span>
+                      </div>
+                      <div className="text-[10px] text-blue-400 font-bold bg-blue-500/10 px-1.5 rounded">AWS</div>
                     </div>
                   </div>
 
