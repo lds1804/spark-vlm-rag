@@ -1,6 +1,7 @@
 import os
 import lancedb
 import requests
+import urllib.parse
 from typing import List, Dict, Optional, Any
 from sentence_transformers import SentenceTransformer
 
@@ -49,12 +50,10 @@ def search_lancedb(query_vector: List[float], top_k: int = 5) -> List[Dict]:
 def build_rag_prompt(query: str, contexts: List[str], history: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
     """Build a chat-style prompt with history and context."""
     system_content = (
-        "You are a helpful research assistant specializing in medical and viral research (CORD-19 dataset). "
-        "Use the following excerpts from scientific papers to answer the user's question.\n\n"
-        "GUIDELINES:\n"
-        "- Be specific and cite details from the context if available.\n"
-        "- If the context doesn't have the exact answer, explain what information is present in the documents.\n"
-        "- Maintain a professional and helpful tone.\n\n"
+        "- Maintain a professional and helpful tone.\n"
+        "- ALWAYS cite your sources using numerical indices like [1], [2] at the end of relevant sentences.\n"
+        "- The context excerpts already have indices [n] provided. Use those indices.\n"
+        "- Use multiple sources if they contribute to the answer.\n\n"
         "CONTEXT EXCERPTS:\n" + "\n---\n".join(contexts)
     )
     
@@ -102,27 +101,59 @@ def rag_chat(query: str, history: Optional[List[Dict[str, str]]] = None) -> Dict
     contexts = [r.get("chunk_text", "") for r in results]
     sources = list({r.get("source", "unknown") for r in results})
     
-    # 3. Prompt & Generate
-    prompt_messages = build_rag_prompt(query, contexts, history)
+    # 3. Deduplicate results to get unique papers
+    unique_papers = []
+    paper_map = {} # doc_id -> index in unique_papers
+    
+    indexed_contexts = []
+    for r in results:
+        doc_id = r.get("doc_id") or r.get("source", "unknown")
+        
+        if doc_id not in paper_map:
+            paper_map[doc_id] = len(unique_papers)
+            
+            # Smart Title Extraction
+            title = r.get("title")
+            if not title or title.strip() == "" or title.lower() == "none":
+                # Fallback to first line of text
+                text = r.get("chunk_text", "")
+                first_line = text.split('\n')[0].strip()
+                if len(first_line) > 10 and len(first_line) < 200:
+                    title = first_line
+                else:
+                    title = r.get("source", "Unknown Research Paper")
+            
+            if title.endswith('.json'): title = title[:-5]
+            if len(title) > 150: title = title[:147] + "..."
+            
+            safe_title = urllib.parse.quote(title)
+            unique_papers.append({
+                "title": title,
+                "metadata": {
+                    "title": title,
+                    "doc_id": doc_id,
+                    "source": r.get("source", "unknown"),
+                    "url": f"https://scholar.google.com/scholar?q={safe_title}"
+                }
+            })
+        
+        # Add context with its paper index [n]
+        paper_idx = paper_map[doc_id] + 1
+        indexed_contexts.append(f"[{paper_idx}] {r.get('chunk_text', '')}")
+
+    # 4. Prompt & Generate
+    prompt_messages = build_rag_prompt(query, indexed_contexts, history)
     answer = call_groq(prompt_messages)
     
-    # 4. Format sources for frontend
-    formatted_sources = []
-    for r in results:
-        formatted_sources.append({
-            "text": r.get("chunk_text", "")[:300],
-            "metadata": {
-                "source": r.get("source", "unknown"),
-                "title": r.get("title", "unknown"),
-                "doc_id": r.get("doc_id", "unknown")
-            }
-        })
+    print(f"DEBUG: Retrieved {len(results)} chunks, found {len(unique_papers)} unique papers")
+    for idx, p in enumerate(unique_papers):
+        print(f"  [{idx+1}] {p['title'][:50]}...")
     
     return {
         "query": query,
         "answer": answer,
-        "contexts": contexts,
-        "sources": formatted_sources
+        "contexts": indexed_contexts,
+        "sources": unique_papers
     }
 
 def rag_query(query: str, top_k: int = 5) -> Dict[str, Any]:

@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, FileText, Database, Zap, Loader2, Sparkles, ServerCrash, ThumbsUp, ThumbsDown, Copy, Check, Paperclip, Cpu, PlusCircle, ArrowUpRight, ChevronRight, ArrowUp, AlertCircle, RotateCcw } from "lucide-react";
+import { Send, FileText, Database, Zap, Loader2, Sparkles, ServerCrash, ThumbsUp, ThumbsDown, Copy, Check, Paperclip, Cpu, PlusCircle, ArrowUpRight, ChevronRight, ArrowUp, AlertCircle, RotateCcw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import TextareaAutosize from 'react-textarea-autosize';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
 // Typing effect component with citations
-const TypewriterText = ({ text, onCitationClick }: { text: string, onCitationClick: (idx: number) => void }) => {
+const TypewriterText = ({ text, sources, onCitationClick }: { text: string, sources?: any[], onCitationClick: (idx: number) => void }) => {
   const [displayedText, setDisplayedText] = useState("");
   const [isFinished, setIsFinished] = useState(false);
 
@@ -28,21 +28,26 @@ const TypewriterText = ({ text, onCitationClick }: { text: string, onCitationCli
     return () => clearInterval(intervalId);
   }, [text]);
 
-  const parts = displayedText.split(/(\[\d+\])/);
+  const parts = displayedText.split(/(\[\d+\]|\(Excerpt\s*\d+\))/i);
 
   return (
     <span>
       {parts.map((part, i) => {
-        const match = part.match(/\[(\d+)\]/);
+        const match = part.match(/\[(\d+)\]/) || part.match(/\(Excerpt\s*(\d+)\)/i);
         if (match) {
           const idx = parseInt(match[1]) - 1;
+          const source = sources && sources[idx];
           return (
             <button
               key={i}
-              onClick={() => onCitationClick(idx)}
-              className="text-indigo-400 font-bold hover:text-indigo-300 mx-0.5 px-1 rounded bg-indigo-500/10 cursor-pointer transition-colors"
+              onClick={() => {
+                onCitationClick(idx);
+                if (source?.metadata?.url) window.open(source.metadata.url, "_blank");
+              }}
+              title={source?.metadata?.title || "View Source"}
+              className="text-cyan-400 font-bold hover:text-cyan-300 mx-0.5 px-1 rounded bg-cyan-500/10 cursor-pointer transition-colors"
             >
-              {part}
+              [{match[1]}]
             </button>
           );
         }
@@ -82,13 +87,17 @@ const CopyButton = ({ text }: { text: string }) => {
 const LatencyChart = ({ latencies }: { latencies: number[] }) => {
   const maxLat = Math.max(...latencies, 1000);
   return (
-    <div className="flex items-end gap-1 h-12 w-full mt-2">
-      {latencies.slice(-12).map((lat, i) => (
+    <div className="flex items-end gap-1 h-12 w-full mt-2 relative">
+      {latencies.slice(-15).map((lat, i, arr) => (
         <motion.div
           key={i}
           initial={{ height: 0 }}
           animate={{ height: `${(lat / maxLat) * 100}%` }}
-          className="flex-1 bg-gradient-to-t from-teal-500/20 to-teal-400/60 rounded-t-[2px] min-w-[4px]"
+          className={`flex-1 rounded-t-[2px] min-w-[3px] transition-colors ${
+            i === arr.length - 1 
+              ? "bg-teal-400 shadow-[0_0_8px_rgba(45,212,191,0.6)]" 
+              : "bg-teal-500/20"
+          }`}
         />
       ))}
       {latencies.length === 0 && (
@@ -385,14 +394,15 @@ export default function App() {
                               : "bg-[#111113] text-white/90 border border-white/10 rounded-tl-sm shadow-xl"
                         }`}>
                            {message.role === "assistant" && !message.error ? (
-                              <TypewriterText 
-                                text={message.content} 
-                                onCitationClick={(idx) => {
-                                  setHighlightedSourceIdx(idx);
-                                  setTimeout(() => setHighlightedSourceIdx(null), 3000);
-                                }} 
-                              />
-                           ) : (
+                            <TypewriterText 
+                              text={message.content} 
+                              sources={message.sources}
+                              onCitationClick={(idx) => {
+                                setHighlightedSourceIdx(idx);
+                                setTimeout(() => setHighlightedSourceIdx(null), 3000);
+                              }} 
+                            />
+                         ) : (
                               <div className="flex flex-col gap-3">
                                 {message.error && (
                                   <div className="flex items-center gap-2 text-red-400 font-semibold mb-1">
@@ -428,35 +438,57 @@ export default function App() {
                         {/* Assistant Extras: Metrics & Sources */}
                         {message.role === "assistant" && !message.error && (
                           <div className="flex flex-col gap-4 w-full">
-                            {/* Sources row inside the message */}
-                            {message.sources && message.sources.length > 0 && (
-                              <div className="flex flex-wrap gap-2">
-                                 {message.sources.map((src, sIdx) => (
-                                   <Badge 
-                                     key={sIdx} 
-                                     variant="secondary" 
-                                     className={`bg-white/5 border-white/5 text-[10px] text-white/40 transition-all duration-500 ${
-                                       highlightedSourceIdx === sIdx 
-                                        ? "ring-2 ring-indigo-500 border-indigo-500/50 bg-indigo-500/20 text-indigo-300 scale-105 shadow-[0_0_15px_rgba(99,102,241,0.3)]" 
-                                        : "hover:bg-white/10"
-                                     }`}
-                                   >
-                                     <span className="font-bold mr-1">[{sIdx + 1}]</span>
-                                     {src.metadata?.title?.substring(0, 30) || "Source Document"}...
-                                   </Badge>
-                                 ))}
-                              </div>
-                            )}
+                            {/* Sources / References Section */}
+                          {message.sources && message.sources.length > 0 && (
+                            <div className="flex flex-col gap-2 mt-2 pt-4 border-t border-white/5">
+                               <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-1">Cited References</div>
+                               <div className="grid grid-cols-1 gap-2">
+                                  {message.sources.map((src, sIdx) => (
+                                    <div 
+                                      key={sIdx}
+                                      className={`flex items-start gap-3 p-3 rounded-xl border transition-all duration-300 ${
+                                        highlightedSourceIdx === sIdx 
+                                         ? "bg-indigo-500/15 border-indigo-500/40 ring-1 ring-indigo-500/20" 
+                                         : "bg-white/[0.02] border-white/5 hover:bg-white/[0.05] hover:border-white/10"
+                                      }`}
+                                    >
+                                      <span className="flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 text-xs font-bold shrink-0 mt-0.5">
+                                        {sIdx + 1}
+                                      </span>
+                                      <div className="flex flex-col gap-2 min-w-0 flex-1">
+                                        <div className="flex flex-col">
+                                          <span className="text-xs font-bold text-white/90 leading-snug">
+                                            {src.metadata?.title || "Research Document"}
+                                          </span>
+                                          <span className="text-[10px] text-white/30 uppercase mt-1">
+                                            {src.metadata?.source || "Scientific Source"}
+                                          </span>
+                                        </div>
+                                        
+                                        <button 
+                                          onClick={() => window.open(src.metadata?.url, "_blank")}
+                                          className="flex items-center gap-2 w-fit px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-[10px] font-bold text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-500/30 transition-all group/btn"
+                                        >
+                                          <Search className="w-3 h-3" />
+                                          Search Google Scholar
+                                          <ArrowUpRight className="w-3 h-3 opacity-50 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5 transition-transform" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                               </div>
+                            </div>
+                          )}
   
                             {/* Latency & Cost */}
-                            <div className="flex gap-2">
+                            <div className="flex gap-2 mt-4">
                               {message.latency && (
-                                <Badge variant="outline" className="text-[10px] text-teal-400 border-teal-500/20 bg-teal-500/5">
+                                <Badge variant="outline" className="text-[10px] text-teal-400 border-teal-500/20 bg-teal-500/5 px-2 py-0.5">
                                   <Zap className="w-3 h-3 mr-1" /> {message.latency}ms
                                 </Badge>
                               )}
                               {message.costEstimate && (
-                                <Badge variant="outline" className="text-[10px] text-white/30 border-white/5 bg-white/5">
+                                <Badge variant="outline" className="text-[10px] text-white/40 border-white/5 bg-white/5 px-2 py-0.5">
                                   💰 {message.costEstimate}
                                 </Badge>
                               )}
