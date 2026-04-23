@@ -1,8 +1,12 @@
 lancedb
-llama-index
+llama-index-core
 llama-index-vector-stores-lancedb
 llama-index-llms-groq
 llama-index-embeddings-huggingface
 sentence-transformers
 pyarrow
 pydantic>=2.0.0
+fastapi
+uvicorn
+requests
+boto3

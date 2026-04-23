@@ -1,127 +1,129 @@
 import os
+import lancedb
 import requests
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
+from sentence_transformers import SentenceTransformer
 
-VLLM_HOST = os.getenv("VLLM_HOST", "http://localhost:8000")
-VLLM_EMBEDDING_ENDPOINT = f"{VLLM_HOST}/v1/embeddings"
-VLLM_CHAT_ENDPOINT = f"{VLLM_HOST}/v1/chat/completions"
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en")
-LLM_MODEL = os.getenv("LLM_MODEL", "meta-llama/Llama-2-7b-chat-hf")
-VLLM_API_KEY = os.getenv("VLLM_API_KEY", "")
+# --- Configuration ---
+LANCEDB_URI = os.getenv("LANCEDB_URI", "s3://vllm-chunking/lancedb")
+TABLE_NAME = os.getenv("TABLE_NAME", "chunks")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+HF_HOME = os.getenv("HF_HOME", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".hf_cache"))
 
-VECTOR_DB_HOST = os.getenv("VECTOR_DB_HOST", "localhost")
-VECTOR_DB_PORT = int(os.getenv("VECTOR_DB_PORT", "8080"))
-VECTOR_DB_CLASS = os.getenv("VECTOR_DB_CLASS", "DocumentChunk")
+# Ensure HF cache is set
+os.environ["HF_HOME"] = HF_HOME
 
+# Global model cache
+_model = None
 
-def get_query_embedding(query: str) -> List[float]:
-    """Generate embedding for user query via vLLM."""
-    headers = {"Content-Type": "application/json"}
-    if VLLM_API_KEY:
-        headers["Authorization"] = f"Bearer {VLLM_API_KEY}"
+def get_embedding_model():
+    global _model
+    if _model is None:
+        print(f"Loading embedding model: {EMBEDDING_MODEL}...")
+        _model = SentenceTransformer(EMBEDDING_MODEL)
+    return _model
 
-    payload = {
-        "model": EMBEDDING_MODEL,
-        "input": [query]
+def get_aws_storage_options():
+    # Use environment variables for S3 access
+    opts = {
+        "aws_access_key_id": os.getenv("AWS_ACCESS_KEY_ID"),
+        "aws_secret_access_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
+        "aws_region": os.getenv("AWS_REGION", "us-east-1"),
     }
+    session_token = os.getenv("AWS_SESSION_TOKEN")
+    if session_token:
+        opts["aws_session_token"] = session_token
+    return opts
 
-    response = requests.post(
-        VLLM_EMBEDDING_ENDPOINT,
-        headers=headers,
-        json=payload,
-        timeout=60
+def search_lancedb(query_vector: List[float], top_k: int = 5) -> List[Dict]:
+    """Search LanceDB on S3 directly."""
+    storage_options = get_aws_storage_options()
+    db = lancedb.connect(LANCEDB_URI, storage_options=storage_options)
+    table = db.open_table(TABLE_NAME)
+    
+    results = table.search(query_vector).limit(top_k).to_list()
+    return results
+
+def build_rag_prompt(query: str, contexts: List[str], history: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
+    """Build a chat-style prompt with history and context."""
+    system_content = (
+        "You are a helpful research assistant specializing in medical and viral research (CORD-19 dataset). "
+        "Use the following excerpts from scientific papers to answer the user's question.\n\n"
+        "GUIDELINES:\n"
+        "- Be specific and cite details from the context if available.\n"
+        "- If the context doesn't have the exact answer, explain what information is present in the documents.\n"
+        "- Maintain a professional and helpful tone.\n\n"
+        "CONTEXT EXCERPTS:\n" + "\n---\n".join(contexts)
     )
-    response.raise_for_status()
-    data = response.json()
-    return data["data"][0]["embedding"]
-
-
-def search_vector_db(embedding: List[float], top_k: int = 5) -> List[Dict]:
-    """
-    Search Weaviate for nearest neighbors.
-    Adapt query structure if using Milvus, pgvector or OpenSearch.
-    """
-    # Weaviate GraphQL example
-    query = {
-        "query": """
+    
+    messages = [
         {
-          Get {
-            """ + VECTOR_DB_CLASS + """(
-              nearVector: {
-                vector: """ + str(embedding) + """
-              }
-              limit: """ + str(top_k) + """
-            ) {
-              chunk_text
-              source
-              doc_id
-            }
-          }
+            "role": "system",
+            "content": system_content
         }
-        """
+    ]
+    
+    # Add history (limited to last 5 turns)
+    if history:
+        messages.extend(history[-10:]) # 5 turns = 10 messages
+        
+    # Add current query
+    messages.append({"role": "user", "content": query})
+    return messages
+
+def call_groq(messages: List[Dict[str, str]]) -> str:
+    """Call Groq API directly."""
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
-
-    url = f"http://{VECTOR_DB_HOST}:{VECTOR_DB_PORT}/v1/graphql"
-    response = requests.post(url, json=query, timeout=30)
-    response.raise_for_status()
-    result = response.json()
-
-    if "data" in result and "Get" in result["data"]:
-        return result["data"]["Get"].get(VECTOR_DB_CLASS, [])
-    return []
-
-
-def build_prompt(query: str, contexts: List[str]) -> str:
-    """Build a simple RAG prompt with retrieved context."""
-    context_block = "\n\n".join(
-        f"Context {i+1}:\n{ctx}" for i, ctx in enumerate(contexts)
-    )
-    prompt = (
-        "You are a helpful assistant. Use only the provided context to answer the question.\n\n"
-        f"{context_block}\n\n"
-        f"Question: {query}\n\n"
-        "Answer:"
-    )
-    return prompt
-
-
-def generate_answer(prompt: str, max_tokens: int = 512, temperature: float = 0.7) -> str:
-    """Call vLLM chat completions endpoint."""
-    headers = {"Content-Type": "application/json"}
-    if VLLM_API_KEY:
-        headers["Authorization"] = f"Bearer {VLLM_API_KEY}"
-
     payload = {
-        "model": LLM_MODEL,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 1024
     }
-
-    response = requests.post(
-        VLLM_CHAT_ENDPOINT,
-        headers=headers,
-        json=payload,
-        timeout=120
-    )
+    
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
     response.raise_for_status()
-    data = response.json()
-    return data["choices"][0]["message"]["content"]
+    return response.json()["choices"][0]["message"]["content"]
 
-
-def rag_query(query: str, top_k: int = 5) -> Dict:
-    """Full RAG pipeline: embed -> retrieve -> generate."""
-    embedding = get_query_embedding(query)
-    results = search_vector_db(embedding, top_k=top_k)
-    contexts = [r["chunk_text"] for r in results]
-    prompt = build_prompt(query, contexts)
-    answer = generate_answer(prompt)
-
+def rag_chat(query: str, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """Manual RAG pipeline implementation."""
+    # 1. Embed
+    model = get_embedding_model()
+    query_vector = model.encode(query).tolist()
+    
+    # 2. Retrieve (increased top_k for better context)
+    results = search_lancedb(query_vector, top_k=10)
+    contexts = [r.get("chunk_text", "") for r in results]
+    sources = list({r.get("source", "unknown") for r in results})
+    
+    # 3. Prompt & Generate
+    prompt_messages = build_rag_prompt(query, contexts, history)
+    answer = call_groq(prompt_messages)
+    
+    # 4. Format sources for frontend
+    formatted_sources = []
+    for r in results:
+        formatted_sources.append({
+            "text": r.get("chunk_text", "")[:300],
+            "metadata": {
+                "source": r.get("source", "unknown"),
+                "title": r.get("title", "unknown"),
+                "doc_id": r.get("doc_id", "unknown")
+            }
+        })
+    
     return {
         "query": query,
         "answer": answer,
         "contexts": contexts,
-        "sources": list({r.get("source", "") for r in results})
+        "sources": formatted_sources
     }
+
+def rag_query(query: str, top_k: int = 5) -> Dict[str, Any]:
+    return rag_chat(query)

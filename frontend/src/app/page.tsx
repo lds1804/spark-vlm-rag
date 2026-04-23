@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, FileText, Database, Zap, Loader2, Sparkles, ServerCrash, ThumbsUp, ThumbsDown, Copy, Check, Paperclip, Cpu, PlusCircle, ArrowUpRight, ChevronRight, ArrowUp } from "lucide-react";
+import { Send, FileText, Database, Zap, Loader2, Sparkles, ServerCrash, ThumbsUp, ThumbsDown, Copy, Check, Paperclip, Cpu, PlusCircle, ArrowUpRight, ChevronRight, ArrowUp, AlertCircle, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import TextareaAutosize from 'react-textarea-autosize';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -78,6 +78,26 @@ const CopyButton = ({ text }: { text: string }) => {
   );
 };
 
+// Simple Sparkline/Bar Chart for Latency
+const LatencyChart = ({ latencies }: { latencies: number[] }) => {
+  const maxLat = Math.max(...latencies, 1000);
+  return (
+    <div className="flex items-end gap-1 h-12 w-full mt-2">
+      {latencies.slice(-12).map((lat, i) => (
+        <motion.div
+          key={i}
+          initial={{ height: 0 }}
+          animate={{ height: `${(lat / maxLat) * 100}%` }}
+          className="flex-1 bg-gradient-to-t from-teal-500/20 to-teal-400/60 rounded-t-[2px] min-w-[4px]"
+        />
+      ))}
+      {latencies.length === 0 && (
+        <div className="flex-1 border-b border-white/5 h-px w-full self-center" />
+      )}
+    </div>
+  );
+};
+
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -91,13 +111,19 @@ export default function App() {
     }
   }, [messages, isLoading]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
+  const handleSubmit = async (e?: React.FormEvent, retryInput?: string) => {
+    if (e) e.preventDefault();
+    const queryText = retryInput || input;
+    if (!queryText.trim() || isLoading) return;
 
-    const userMessage: Message = { id: Date.now().toString(), role: "user", content: input };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
+    const userMessage: Message = { id: Date.now().toString(), role: "user", content: queryText };
+    if (!retryInput) {
+      setMessages((prev) => [...prev, userMessage]);
+      setInput("");
+    } else {
+      // If retrying, remove the last error message first
+      setMessages((prev) => prev.filter(m => !m.error).concat(userMessage));
+    }
     setIsLoading(true);
 
     const startTime = performance.now();
@@ -108,7 +134,10 @@ export default function App() {
       const res = await fetch(lambdaUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: userMessage.content }),
+        body: JSON.stringify({ 
+          query: userMessage.content,
+          history: messages.map(m => ({ role: m.role, content: m.content }))
+        }),
       });
 
       const endTime = performance.now();
@@ -127,13 +156,19 @@ export default function App() {
         cleanAnswer = cleanAnswer.substring(0, refIndex).trim();
       }
 
+      // Estimated cost logic (Groq Llama 3.3 70B: ~$0.79 per 1M tokens)
+      const contextLength = (data.contexts || []).join("").length;
+      const answerLength = cleanAnswer.length;
+      const estTokens = (contextLength + answerLength) / 4;
+      const calculatedCost = (estTokens / 1_000_000) * 0.79;
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
         content: cleanAnswer,
         sources: data.sources || [],
         latency: data.latency || latencyMs,
-        costEstimate: data.costEstimate ? `$${parseFloat(data.costEstimate).toFixed(5)}` : "~1¢"
+        costEstimate: `$${calculatedCost.toFixed(5)}`
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -151,7 +186,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[#050505] text-white font-sans selection:bg-indigo-500/30 overflow-hidden relative">
+    <div className="flex h-screen max-h-screen bg-[#050505] text-white font-sans selection:bg-indigo-500/30 overflow-hidden relative">
       
       {/* Dynamic Background */}
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
@@ -172,8 +207,8 @@ export default function App() {
         <ScrollArea className="flex-1 -mr-2 pr-2">
           <div className="space-y-8">
             {/* Status */}
-            <div>
-               <div className="flex items-center gap-2 mb-4 px-1">
+            <div className="px-1">
+               <div className="flex items-center gap-3 p-3 rounded-xl bg-teal-500/5 border border-teal-500/10 mb-4">
                   <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse shadow-[0_0_8px_rgba(45,212,191,0.5)]" />
                   <span className="text-[10px] font-bold text-teal-400 uppercase tracking-widest">System Online</span>
                </div>
@@ -217,26 +252,45 @@ export default function App() {
 
             {/* Stats */}
             <div>
-              <h3 className="text-[11px] font-bold text-white/30 mb-4 uppercase tracking-[0.1em]">Metrics</h3>
+              <h3 className="text-[11px] font-bold text-white/30 mb-4 uppercase tracking-[0.1em]">Performance Metrics</h3>
               <Card className="bg-white/[0.02] border-white/5 !shadow-none">
-                <CardContent className="p-4 flex flex-col gap-4">
+                <CardContent className="p-4 flex flex-col gap-5">
+                  {/* Latency Metric */}
                   <div>
-                    <div className="text-white/30 text-[9px] uppercase font-bold mb-1">Total Infra Cost/Day</div>
-                    <div className="text-lg font-light text-teal-300">$0.01 <span className="text-[10px] text-white/20">/ day</span></div>
+                    <div className="flex justify-between items-end mb-2">
+                      <div className="text-white/30 text-[9px] uppercase font-bold">API Latency Trend</div>
+                      <div className="text-teal-400 text-[10px] font-mono">
+                        {messages.filter(m => m.latency).slice(-1)[0]?.latency || 0}ms
+                      </div>
+                    </div>
+                    <LatencyChart latencies={messages.filter(m => m.latency).map(m => m.latency || 0)} />
                   </div>
+
                   <div className="h-px bg-white/5 w-full" />
+                  
+                  {/* Cost Metric */}
                   <div>
                     <div className="text-white/30 text-[9px] uppercase font-bold mb-1">Session Estimated Cost</div>
-                    <div className="text-sm font-semibold text-white/80">
-                      ${messages.reduce((acc, m) => {
-                        const val = m.costEstimate?.startsWith('$') ? parseFloat(m.costEstimate.substring(1)) : 0;
-                        return acc + (isNaN(val) ? 0 : val);
-                      }, 0).toFixed(5)}
+                    <div className="flex items-baseline gap-2">
+                      <div className="text-xl font-light text-white/90">
+                        ${messages.reduce((acc, m) => {
+                          const val = m.costEstimate?.startsWith('$') ? parseFloat(m.costEstimate.substring(1)) : 0;
+                          return acc + (isNaN(val) ? 0 : val);
+                        }, 0).toFixed(5)}
+                      </div>
+                      <div className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 rounded">ECO</div>
                     </div>
                   </div>
+
+                  <div className="h-px bg-white/5 w-full" />
+
+                  {/* Knowledge Base */}
                   <div>
                     <div className="text-white/30 text-[9px] uppercase font-bold mb-1">Knowledge Base</div>
-                    <div className="text-xs font-medium text-white/60">3.3M Research Chunks</div>
+                    <div className="flex items-center gap-2">
+                       <Database className="w-3 h-3 text-indigo-400" />
+                       <div className="text-xs font-medium text-white/60">3.3M Research Chunks</div>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -253,10 +307,10 @@ export default function App() {
       </div>
 
       {/* Main Container */}
-      <div className="flex-1 flex flex-col relative z-10 w-full h-full min-w-0">
+      <div className="flex-1 relative h-full bg-[#050505] overflow-hidden z-10">
         
-        {/* Mobile Header only */}
-        <div className="h-16 border-b border-white/5 flex items-center px-6 lg:hidden bg-black/40 backdrop-blur-md shrink-0">
+        {/* Mobile Header (Hidden on Desktop) */}
+        <div className="lg:hidden h-16 border-b border-white/5 flex items-center px-6 bg-black/40 backdrop-blur-md relative z-40">
           <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400 flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-indigo-400" />
             RAG<span className="font-light text-white">Scale</span>
@@ -269,13 +323,18 @@ export default function App() {
           </div>
         </div>
 
-        {/* Chat Content */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="max-w-3xl mx-auto w-full py-12 px-6 flex flex-col gap-12">
+        {/* Chat Content - Full Height Scrollable area */}
+        <div className="h-full overflow-y-auto custom-scrollbar pt-32 pb-40 px-6">
+          <div className="max-w-3xl mx-auto w-full flex flex-col gap-12">
             
             {messages.length === 0 && !isLoading && (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 mb-8 shadow-2xl">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 1 }}
+                className="flex flex-col items-center justify-center py-20 text-center"
+              >
+                <div className="w-16 h-16 min-h-[64px] rounded-2xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 mb-8 shadow-2xl">
                    <Database className="w-8 h-8 text-indigo-400" />
                 </div>
                 <h2 className="text-3xl font-bold mb-4 tracking-tight">Scientific Knowledge Hub</h2>
@@ -289,12 +348,16 @@ export default function App() {
                     "Impact of superspreaders",
                     "Herd immunity studies"
                   ].map((p, i) => (
-                    <button key={i} onClick={() => setInput(p)} className="p-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.06] hover:border-white/10 text-left transition-all">
-                      <p className="text-sm font-medium text-white/70">{p}</p>
+                    <button 
+                      key={i} 
+                      onClick={() => setInput(p)} 
+                      className="p-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-indigo-500/30 hover:shadow-[0_0_20px_rgba(99,102,241,0.1)] text-left transition-all group"
+                    >
+                      <p className="text-sm font-medium text-white/70 group-hover:text-white transition-colors">{p}</p>
                     </button>
                   ))}
                 </div>
-              </div>
+              </motion.div>
             )}
 
             <AnimatePresence>
@@ -305,18 +368,20 @@ export default function App() {
                   animate={{ opacity: 1, y: 0 }}
                   className={`flex flex-col gap-4 ${message.role === "user" ? "items-end" : "items-start"}`}
                 >
-                  <div className={`flex items-start gap-4 max-w-[90%] ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+                  <div className={`flex items-start gap-4 max-w-[90%] min-w-[120px] ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
                     <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 border ${
-                      message.role === "user" ? "bg-indigo-600 border-indigo-400" : "bg-white/5 border-white/10"
+                      message.role === "user" ? "bg-indigo-500/10 border-indigo-500/20" : "bg-white/5 border-white/10"
                     }`}>
-                      {message.role === "user" ? <Cpu className="w-4 h-4 text-white" /> : <Sparkles className="w-4 h-4 text-indigo-400" />}
+                      {message.role === "user" ? <Cpu className="w-4 h-4 text-indigo-400" /> : <Sparkles className="w-4 h-4 text-indigo-400" />}
                     </div>
                     
                     <div className={`flex flex-col gap-3 ${message.role === "user" ? "items-end" : "items-start"}`}>
-                      <div className={`px-6 py-4 rounded-2xl text-[15px] leading-relaxed relative group ${
+                      <div className={`px-6 py-4 rounded-2xl text-[15px] leading-relaxed relative group min-w-[140px] ${
                         message.role === "user" 
                           ? "bg-indigo-600/90 text-white rounded-tr-sm" 
-                          : "bg-[#111113] text-white/90 border border-white/10 rounded-tl-sm shadow-xl"
+                          : message.error
+                            ? "bg-red-500/5 text-red-200 border border-red-500/20 rounded-tl-sm shadow-xl"
+                            : "bg-[#111113] text-white/90 border border-white/10 rounded-tl-sm shadow-xl"
                       }`}>
                          {message.role === "assistant" && !message.error ? (
                             <TypewriterText 
@@ -326,7 +391,31 @@ export default function App() {
                                 setTimeout(() => setHighlightedSourceIdx(null), 3000);
                               }} 
                             />
-                         ) : message.content}
+                         ) : (
+                            <div className="flex flex-col gap-3">
+                              {message.error && (
+                                <div className="flex items-center gap-2 text-red-400 font-semibold mb-1">
+                                  <AlertCircle className="w-4 h-4" />
+                                  <span>System Alert</span>
+                                </div>
+                              )}
+                              <div>{message.content}</div>
+                              {message.error && (
+                                <Button 
+                                  onClick={() => {
+                                    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+                                    if (lastUserMsg) handleSubmit(undefined, lastUserMsg.content);
+                                  }}
+                                  variant="outline" 
+                                  size="sm"
+                                  className="mt-2 w-fit bg-red-500/10 border-red-500/20 hover:bg-red-500/20 text-red-300 gap-2 h-8 text-xs"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  Tentar Novamente
+                                </Button>
+                              )}
+                            </div>
+                         )}
                          
                          {message.role === "assistant" && !message.error && (
                             <div className="absolute -bottom-3 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -396,8 +485,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Floating Input bar */}
-        <div className="p-6 pt-0 bg-gradient-to-t from-[#050505] to-transparent relative z-20">
+        {/* Fixed Input bar at the absolute bottom of viewport */}
+        <div className="fixed bottom-0 left-0 lg:left-72 right-0 px-6 pb-8 pt-10 bg-gradient-to-t from-[#050505] via-[#050505] to-transparent z-50">
           <form onSubmit={handleSubmit} className="max-w-3xl mx-auto relative">
             <div className="relative flex items-center bg-[#131315]/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl focus-within:border-indigo-500/50 transition-all">
               <div className="p-3 pr-0">

@@ -51,3 +51,6 @@ infrastructure/chunk-test-instance.txt
 .data_sample
 sample_chunk.parquet
 .hf_cache/
+
+# Local tests
+api/test_api_local.py
