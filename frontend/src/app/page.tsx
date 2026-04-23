@@ -207,9 +207,9 @@ export default function App() {
         <ScrollArea className="flex-1 -mr-2 pr-2">
           <div className="space-y-8">
             {/* Status */}
-            <div className="px-1">
+            <div className="">
                <div className="flex items-center gap-3 p-3 rounded-xl bg-teal-500/5 border border-teal-500/10 mb-4">
-                  <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse shadow-[0_0_8px_rgba(45,212,191,0.5)]" />
+                  <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse shadow-[0_0_8px_rgba(45,212,191,0.5)] shrink-0" />
                   <span className="text-[10px] font-bold text-teal-400 uppercase tracking-widest">System Online</span>
                </div>
             </div>
@@ -324,15 +324,15 @@ export default function App() {
         </div>
 
         {/* Chat Content - Full Height Scrollable area */}
-        <div className="h-full overflow-y-auto custom-scrollbar pt-32 pb-40 px-6">
-          <div className="max-w-3xl mx-auto w-full flex flex-col gap-12">
+        <div className="h-full overflow-y-auto custom-scrollbar px-6">
+          <div className="max-w-3xl mx-auto w-full min-h-full flex flex-col pt-32 pb-32">
             
             {messages.length === 0 && !isLoading && (
               <motion.div 
                 initial={{ opacity: 0, y: 5 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.8 }}
-                className="flex flex-col items-center text-center pt-10"
+                className="flex-1 flex flex-col items-center justify-center text-center"
               >
                 <div className="w-16 h-16 min-h-[64px] rounded-2xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 mb-8 shadow-2xl shrink-0">
                    <Database className="w-8 h-8 text-indigo-400" />
@@ -361,111 +361,113 @@ export default function App() {
             )}
 
             <AnimatePresence>
-              {messages.map((message) => (
-                <motion.div
-                  key={message.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`flex flex-col gap-4 ${message.role === "user" ? "items-end" : "items-start"}`}
-                >
-                  <div className={`flex items-start gap-4 max-w-[90%] min-w-[120px] ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 border ${
-                      message.role === "user" ? "bg-indigo-500/10 border-indigo-500/20" : "bg-white/5 border-white/10"
-                    }`}>
-                      {message.role === "user" ? <Cpu className="w-4 h-4 text-indigo-400" /> : <Sparkles className="w-4 h-4 text-indigo-400" />}
-                    </div>
-                    
-                    <div className={`flex flex-col gap-3 ${message.role === "user" ? "items-end" : "items-start"}`}>
-                      <div className={`px-6 py-4 rounded-2xl text-[15px] leading-relaxed relative group min-w-[140px] ${
-                        message.role === "user" 
-                          ? "bg-indigo-600/90 text-white rounded-tr-sm" 
-                          : message.error
-                            ? "bg-red-500/5 text-red-200 border border-red-500/20 rounded-tl-sm shadow-xl"
-                            : "bg-[#111113] text-white/90 border border-white/10 rounded-tl-sm shadow-xl"
+              <div className="flex flex-col gap-12 w-full">
+                {messages.map((message) => (
+                  <motion.div
+                    key={message.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`flex flex-col gap-4 ${message.role === "user" ? "items-end" : "items-start"}`}
+                  >
+                    <div className={`flex items-start gap-4 max-w-[90%] min-w-[120px] ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 border ${
+                        message.role === "user" ? "bg-indigo-500/10 border-indigo-500/20" : "bg-white/5 border-white/10"
                       }`}>
-                         {message.role === "assistant" && !message.error ? (
-                            <TypewriterText 
-                              text={message.content} 
-                              onCitationClick={(idx) => {
-                                setHighlightedSourceIdx(idx);
-                                setTimeout(() => setHighlightedSourceIdx(null), 3000);
-                              }} 
-                            />
-                         ) : (
-                            <div className="flex flex-col gap-3">
-                              {message.error && (
-                                <div className="flex items-center gap-2 text-red-400 font-semibold mb-1">
-                                  <AlertCircle className="w-4 h-4" />
-                                  <span>System Alert</span>
-                                </div>
-                              )}
-                              <div>{message.content}</div>
-                              {message.error && (
-                                <Button 
-                                  onClick={() => {
-                                    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
-                                    if (lastUserMsg) handleSubmit(undefined, lastUserMsg.content);
-                                  }}
-                                  variant="outline" 
-                                  size="sm"
-                                  className="mt-2 w-fit bg-red-500/10 border-red-500/20 hover:bg-red-500/20 text-red-300 gap-2 h-8 text-xs"
-                                >
-                                  <RotateCcw className="w-3 h-3" />
-                                  Tentar Novamente
-                                </Button>
-                              )}
-                            </div>
-                         )}
-                         
-                         {message.role === "assistant" && !message.error && (
-                            <div className="absolute -bottom-3 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <CopyButton text={message.content} />
-                            </div>
-                         )}
+                        {message.role === "user" ? <Cpu className="w-4 h-4 text-indigo-400" /> : <Sparkles className="w-4 h-4 text-indigo-400" />}
                       </div>
-
-                      {/* Assistant Extras: Metrics & Sources */}
-                      {message.role === "assistant" && !message.error && (
-                        <div className="flex flex-col gap-4 w-full">
-                          {/* Sources row inside the message */}
-                          {message.sources && message.sources.length > 0 && (
-                            <div className="flex flex-wrap gap-2">
-                               {message.sources.map((src, sIdx) => (
-                                 <Badge 
-                                   key={sIdx} 
-                                   variant="secondary" 
-                                   className={`bg-white/5 border-white/5 text-[10px] text-white/40 transition-all duration-500 ${
-                                     highlightedSourceIdx === sIdx 
-                                      ? "ring-2 ring-indigo-500 border-indigo-500/50 bg-indigo-500/20 text-indigo-300 scale-105 shadow-[0_0_15px_rgba(99,102,241,0.3)]" 
-                                      : "hover:bg-white/10"
-                                   }`}
-                                 >
-                                   <span className="font-bold mr-1">[{sIdx + 1}]</span>
-                                   {src.metadata?.title?.substring(0, 30) || "Source Document"}...
-                                 </Badge>
-                               ))}
-                            </div>
-                          )}
-
-                          {/* Latency & Cost */}
-                          <div className="flex gap-2">
-                            {message.latency && (
-                              <Badge variant="outline" className="text-[10px] text-teal-400 border-teal-500/20 bg-teal-500/5">
-                                <Zap className="w-3 h-3 mr-1" /> {message.latency}ms
-                              </Badge>
-                            )}
-                            {message.costEstimate && (
-                              <Badge variant="outline" className="text-[10px] text-white/30 border-white/5 bg-white/5">
-                                💰 {message.costEstimate}
-                              </Badge>
-                            )}
-                          </div>
+                      
+                      <div className={`flex flex-col gap-3 ${message.role === "user" ? "items-end" : "items-start"}`}>
+                        <div className={`px-6 py-4 rounded-2xl text-[15px] leading-relaxed relative group min-w-[140px] ${
+                          message.role === "user" 
+                            ? "bg-indigo-600/90 text-white rounded-tr-sm" 
+                            : message.error
+                              ? "bg-red-500/5 text-red-200 border border-red-500/20 rounded-tl-sm shadow-xl"
+                              : "bg-[#111113] text-white/90 border border-white/10 rounded-tl-sm shadow-xl"
+                        }`}>
+                           {message.role === "assistant" && !message.error ? (
+                              <TypewriterText 
+                                text={message.content} 
+                                onCitationClick={(idx) => {
+                                  setHighlightedSourceIdx(idx);
+                                  setTimeout(() => setHighlightedSourceIdx(null), 3000);
+                                }} 
+                              />
+                           ) : (
+                              <div className="flex flex-col gap-3">
+                                {message.error && (
+                                  <div className="flex items-center gap-2 text-red-400 font-semibold mb-1">
+                                    <AlertCircle className="w-4 h-4" />
+                                    <span>System Alert</span>
+                                  </div>
+                                )}
+                                <div>{message.content}</div>
+                                {message.error && (
+                                  <Button 
+                                    onClick={() => {
+                                      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+                                      if (lastUserMsg) handleSubmit(undefined, lastUserMsg.content);
+                                    }}
+                                    variant="outline" 
+                                    size="sm"
+                                    className="mt-2 w-fit bg-red-500/10 border-red-500/20 hover:bg-red-500/20 text-red-300 gap-2 h-8 text-xs"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    Tentar Novamente
+                                  </Button>
+                                )}
+                              </div>
+                           )}
+                           
+                           {message.role === "assistant" && !message.error && (
+                              <div className="absolute -bottom-3 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <CopyButton text={message.content} />
+                              </div>
+                           )}
                         </div>
-                      )}
+  
+                        {/* Assistant Extras: Metrics & Sources */}
+                        {message.role === "assistant" && !message.error && (
+                          <div className="flex flex-col gap-4 w-full">
+                            {/* Sources row inside the message */}
+                            {message.sources && message.sources.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                 {message.sources.map((src, sIdx) => (
+                                   <Badge 
+                                     key={sIdx} 
+                                     variant="secondary" 
+                                     className={`bg-white/5 border-white/5 text-[10px] text-white/40 transition-all duration-500 ${
+                                       highlightedSourceIdx === sIdx 
+                                        ? "ring-2 ring-indigo-500 border-indigo-500/50 bg-indigo-500/20 text-indigo-300 scale-105 shadow-[0_0_15px_rgba(99,102,241,0.3)]" 
+                                        : "hover:bg-white/10"
+                                     }`}
+                                   >
+                                     <span className="font-bold mr-1">[{sIdx + 1}]</span>
+                                     {src.metadata?.title?.substring(0, 30) || "Source Document"}...
+                                   </Badge>
+                                 ))}
+                              </div>
+                            )}
+  
+                            {/* Latency & Cost */}
+                            <div className="flex gap-2">
+                              {message.latency && (
+                                <Badge variant="outline" className="text-[10px] text-teal-400 border-teal-500/20 bg-teal-500/5">
+                                  <Zap className="w-3 h-3 mr-1" /> {message.latency}ms
+                                </Badge>
+                              )}
+                              {message.costEstimate && (
+                                <Badge variant="outline" className="text-[10px] text-white/30 border-white/5 bg-white/5">
+                                  💰 {message.costEstimate}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </motion.div>
-              ))}
+                  </motion.div>
+                ))}
+              </div>
             </AnimatePresence>
 
             {isLoading && (
