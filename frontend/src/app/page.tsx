@@ -329,12 +329,12 @@ export default function App() {
             
             {messages.length === 0 && !isLoading && (
               <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 1 }}
-                className="flex flex-col items-center justify-center py-20 text-center"
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.8 }}
+                className="flex flex-col items-center text-center pt-10"
               >
-                <div className="w-16 h-16 min-h-[64px] rounded-2xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 mb-8 shadow-2xl">
+                <div className="w-16 h-16 min-h-[64px] rounded-2xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 mb-8 shadow-2xl shrink-0">
                    <Database className="w-8 h-8 text-indigo-400" />
                 </div>
                 <h2 className="text-3xl font-bold mb-4 tracking-tight">Scientific Knowledge Hub</h2>
