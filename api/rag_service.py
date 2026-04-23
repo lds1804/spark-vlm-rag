@@ -36,7 +36,9 @@ def get_aws_storage_options():
     session_token = os.getenv("AWS_SESSION_TOKEN")
     if session_token:
         opts["aws_session_token"] = session_token
-    return opts
+        
+    # Remove None values to allow LanceDB to use default local credentials
+    return {k: v for k, v in opts.items() if v is not None}
 
 def search_lancedb(query_vector: List[float], top_k: int = 5) -> List[Dict]:
     """Search LanceDB on S3 directly."""

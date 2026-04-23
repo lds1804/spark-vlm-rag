@@ -31,29 +31,33 @@ const TypewriterText = ({ text, sources, onCitationClick }: { text: string, sour
   const parts = displayedText.split(/(\[\d+\]|\(Excerpt\s*\d+\))/i);
 
   return (
-    <span>
+    <span className="inline">
       {parts.map((part, i) => {
         const match = part.match(/\[(\d+)\]/) || part.match(/\(Excerpt\s*(\d+)\)/i);
         if (match) {
           const idx = parseInt(match[1]) - 1;
           const source = sources && sources[idx];
+          const url = source?.metadata?.url || source?.url || `https://scholar.google.com/scholar?q=${encodeURIComponent(source?.metadata?.title || source?.title || "Research Paper")}`;
+          
           return (
-            <button
+            <a
               key={i}
-              onClick={() => {
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => {
                 onCitationClick(idx);
-                if (source?.metadata?.url) window.open(source.metadata.url, "_blank");
               }}
-              title={source?.metadata?.title || "View Source"}
-              className="text-cyan-400 font-bold hover:text-cyan-300 mx-0.5 px-1 rounded bg-cyan-500/10 cursor-pointer transition-colors"
+              title={source?.metadata?.title || source?.title || "View Source"}
+              className="inline-flex items-center justify-center text-cyan-400 font-bold hover:text-cyan-300 mx-0.5 px-1.5 rounded bg-cyan-500/10 cursor-pointer transition-all border border-cyan-500/10 hover:border-cyan-500/30 no-underline"
             >
               [{match[1]}]
-            </button>
+            </a>
           );
         }
-        return <span key={i}>{part}</span>;
+        return <span key={i} className="inline">{part}</span>;
       })}
-      {!isFinished && <span className="inline-block w-1.5 h-4 bg-indigo-500 ml-1 animate-pulse" />}
+      {!isFinished && <span className="inline-block w-1.5 h-4 bg-indigo-500 ml-1 animate-pulse align-middle" />}
     </span>
   );
 };
@@ -204,8 +208,8 @@ export default function App() {
       </div>
 
       {/* Left Sidebar */}
-      <div className="w-72 border-r border-white/5 bg-[#0A0A0C]/50 backdrop-blur-xl z-20 hidden lg:flex flex-col pt-8 p-6 shrink-0">
-        <div className="mb-10">
+      <div className="w-72 border-r border-white/5 bg-[#0A0A0C]/50 backdrop-blur-xl z-20 hidden lg:flex flex-col p-6 pt-8 shrink-0">
+        <div className="mb-6">
           <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400 flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-indigo-400" />
             RAG<span className="font-light text-white">Scale</span>
@@ -213,16 +217,8 @@ export default function App() {
           <p className="text-white/30 text-[10px] mt-2 font-bold tracking-[0.2em] uppercase">Enterprise Build</p>
         </div>
 
-        <ScrollArea className="flex-1 -mr-2 pr-2">
-          <div className="space-y-8">
-            {/* Status */}
-            <div className="">
-               <div className="flex items-center gap-3 p-3 rounded-xl bg-teal-500/5 border border-teal-500/10 mb-4">
-                  <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse shadow-[0_0_8px_rgba(45,212,191,0.5)] shrink-0" />
-                  <span className="text-[10px] font-bold text-teal-400 uppercase tracking-widest">System Online</span>
-               </div>
-            </div>
-
+        <div className="flex-1 overflow-y-auto custom-scrollbar -mr-2 pr-2">
+          <div className="space-y-6">
             {/* Architecture */}
             <div>
               <h3 className="text-[11px] font-bold text-white/30 mb-4 uppercase tracking-[0.1em]">Architecture</h3>
@@ -261,9 +257,9 @@ export default function App() {
 
             {/* Stats */}
             <div>
-              <h3 className="text-[11px] font-bold text-white/30 mb-4 uppercase tracking-[0.1em]">Performance Metrics</h3>
+              <h3 className="text-[11px] font-bold text-white/30 mb-3 uppercase tracking-[0.1em]">Performance Metrics</h3>
               <Card className="bg-white/[0.02] border-white/5 !shadow-none">
-                <CardContent className="p-4 flex flex-col gap-5">
+                <CardContent className="p-3 flex flex-col gap-4">
                   {/* Latency Metric */}
                   <div>
                     <div className="flex justify-between items-end mb-2">
@@ -293,7 +289,6 @@ export default function App() {
 
                   <div className="h-px bg-white/5 w-full" />
 
-                  {/* Knowledge Base */}
                   <div>
                     <div className="text-white/30 text-[9px] uppercase font-bold mb-1">Knowledge Base</div>
                     <div className="flex items-center gap-2">
@@ -305,7 +300,7 @@ export default function App() {
               </Card>
             </div>
           </div>
-        </ScrollArea>
+        </div>
 
         <div className="mt-auto pt-6 border-t border-white/5 flex flex-col gap-2">
           <div className="flex justify-between text-[9px] font-bold text-white/20 uppercase tracking-widest px-1">
@@ -458,21 +453,24 @@ export default function App() {
                                       <div className="flex flex-col gap-2 min-w-0 flex-1">
                                         <div className="flex flex-col">
                                           <span className="text-xs font-bold text-white/90 leading-snug">
-                                            {src.metadata?.title || "Research Document"}
+                                            <span className="text-cyan-400 mr-2">[{sIdx + 1}]</span>
+                                            {src.metadata?.title || src.title || "Research Paper"}
                                           </span>
                                           <span className="text-[10px] text-white/30 uppercase mt-1">
-                                            {src.metadata?.source || "Scientific Source"}
+                                            {src.metadata?.source || src.source || "CORD-19 Dataset"}
                                           </span>
                                         </div>
                                         
-                                        <button 
-                                          onClick={() => window.open(src.metadata?.url, "_blank")}
+                                        <a 
+                                          href={src.metadata?.url || src.url || `https://scholar.google.com/scholar?q=${encodeURIComponent(src.metadata?.title || src.title || "")}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
                                           className="flex items-center gap-2 w-fit px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-[10px] font-bold text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-500/30 transition-all group/btn"
                                         >
                                           <Search className="w-3 h-3" />
-                                          Search Google Scholar
+                                          Open Research Paper
                                           <ArrowUpRight className="w-3 h-3 opacity-50 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5 transition-transform" />
-                                        </button>
+                                        </a>
                                       </div>
                                     </div>
                                   ))}
