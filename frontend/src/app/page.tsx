@@ -116,7 +116,15 @@ export default function App() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [highlightedSourceIdx, setHighlightedSourceIdx] = useState<number | null>(null);
+  const [expandedSources, setExpandedSources] = useState<Record<string, boolean>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const toggleSources = (messageId: string) => {
+    setExpandedSources(prev => ({
+      ...prev,
+      [messageId]: !prev[messageId]
+    }));
+  };
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -434,11 +442,21 @@ export default function App() {
                         {message.role === "assistant" && !message.error && (
                           <div className="flex flex-col gap-4 w-full">
                             {/* Sources / References Section */}
-                          {message.sources && message.sources.length > 0 && (
+                           {message.sources && message.sources.length > 0 && (
                             <div className="flex flex-col gap-2 mt-2 pt-4 border-t border-white/5">
-                               <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-1">Cited References</div>
-                               <div className="grid grid-cols-1 gap-2">
-                                  {message.sources.map((src, sIdx) => (
+                               <div className="flex justify-between items-center mb-1">
+                                 <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Cited References</div>
+                                 {message.sources.length > 2 && (
+                                   <button 
+                                     onClick={() => toggleSources(message.id || "")}
+                                     className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors"
+                                   >
+                                     {expandedSources[message.id || ""] ? "Show Less" : `Show All (${message.sources.length})`}
+                                   </button>
+                                 )}
+                               </div>
+                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {(expandedSources[message.id || ""] ? message.sources : message.sources.slice(0, 2)).map((src, sIdx) => (
                                     <div 
                                       key={sIdx}
                                       className={`flex items-start gap-3 p-3 rounded-xl border transition-all duration-300 ${
@@ -450,33 +468,34 @@ export default function App() {
                                       <span className="flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 text-xs font-bold shrink-0 mt-0.5">
                                         {sIdx + 1}
                                       </span>
-                                      <div className="flex flex-col gap-2 min-w-0 flex-1">
+                                     <div className="flex flex-col gap-1.5 min-w-0 flex-1">
                                         <div className="flex flex-col">
-                                          <span className="text-xs font-bold text-white/90 leading-snug">
-                                            <span className="text-cyan-400 mr-2">[{sIdx + 1}]</span>
+                                          <span className="text-[11px] font-bold text-white/90 leading-tight line-clamp-1">
+                                            <span className="text-cyan-400 mr-1">[{sIdx + 1}]</span>
                                             {src.metadata?.title || src.title || "Research Paper"}
-                                          </span>
-                                          <span className="text-[10px] text-white/30 uppercase mt-1">
-                                            {src.metadata?.source || src.source || "CORD-19 Dataset"}
                                           </span>
                                         </div>
                                         
-                                        <a 
-                                          href={src.metadata?.url || src.url || `https://scholar.google.com/scholar?q=${encodeURIComponent(src.metadata?.title || src.title || "")}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="flex items-center gap-2 w-fit px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-[10px] font-bold text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-500/30 transition-all group/btn"
-                                        >
-                                          <Search className="w-3 h-3" />
-                                          Open Research Paper
-                                          <ArrowUpRight className="w-3 h-3 opacity-50 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5 transition-transform" />
-                                        </a>
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-[9px] text-white/20 uppercase truncate font-medium">
+                                            {src.metadata?.source || src.source || "CORD-19"}
+                                          </span>
+                                          <a 
+                                            href={src.metadata?.url || src.url || `https://scholar.google.com/scholar?q=${encodeURIComponent(src.metadata?.title || src.title || "")}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex items-center gap-1 text-[9px] font-bold text-cyan-400/80 hover:text-cyan-300 transition-all group/btn shrink-0"
+                                          >
+                                            View Paper
+                                            <ArrowUpRight className="w-2.5 h-2.5 opacity-50 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5 transition-transform" />
+                                          </a>
+                                        </div>
                                       </div>
                                     </div>
                                   ))}
                                </div>
                             </div>
-                          )}
+                           )}
   
                             {/* Latency & Cost */}
                             <div className="flex gap-2 mt-4">
